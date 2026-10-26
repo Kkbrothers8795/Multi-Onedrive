@@ -1,0 +1,8 @@
+{
+  "name": "MultiDrive for OneDrive Business",
+  "description": "Unified multi-account file management, search, and transfer for OneDrive for Business powered by Microsoft Graph API and OAuth2.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -1,0 +1,14 @@
+services:
+  onedrive-multidrive:
+    build: .
+    container_name: onedrive-multidrive
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - CLIENT_ID=${CLIENT_ID:-}
+      - CLIENT_SECRET=${CLIENT_SECRET:-}
+      - TENANT_ID=${TENANT_ID:-common}
+      - APP_URL=${APP_URL:-http://localhost:3000}

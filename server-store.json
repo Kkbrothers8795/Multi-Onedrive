@@ -1,0 +1,468 @@
+{
+  "accounts": [
+    {
+      "id": "acc-contoso",
+      "name": "Contoso Global HQ (Business E5)",
+      "email": "sarah.chen@contoso.onmicrosoft.com",
+      "tenantName": "contoso.onmicrosoft.com",
+      "accountType": "business",
+      "color": "#0284c7",
+      "isLive": false,
+      "quota": {
+        "total": 1099511627776,
+        "used": 343597383680,
+        "remaining": 755914244096,
+        "state": "normal"
+      },
+      "connectedAt": "2026-09-12T09:30:00.000Z"
+    },
+    {
+      "id": "acc-fabrikam",
+      "name": "Fabrikam Aerospace (Business Premium)",
+      "email": "alex.vance@fabrikam.com",
+      "tenantName": "fabrikamaero.onmicrosoft.com",
+      "accountType": "business",
+      "color": "#10b981",
+      "isLive": false,
+      "quota": {
+        "total": 1099511627776,
+        "used": 584115552256,
+        "remaining": 515396075520,
+        "state": "normal"
+      },
+      "connectedAt": "2026-09-18T14:15:00.000Z"
+    },
+    {
+      "id": "acc-northwind",
+      "name": "Northwind BioLabs (Research E3)",
+      "email": "elena.rostova@northwindlabs.org",
+      "tenantName": "northwindbiolabs.onmicrosoft.com",
+      "accountType": "business",
+      "color": "#8b5cf6",
+      "isLive": false,
+      "quota": {
+        "total": 536870912000,
+        "used": 128849018880,
+        "remaining": 408021893120,
+        "state": "normal"
+      },
+      "connectedAt": "2026-10-02T11:45:00.000Z"
+    }
+  ],
+  "items": [
+    {
+      "id": "fold-contoso-fin",
+      "name": "Financial & Strategy 2026",
+      "accountId": "acc-contoso",
+      "accountName": "Contoso Global HQ (Business E5)",
+      "accountColor": "#0284c7",
+      "parentId": null,
+      "isFolder": true,
+      "size": 5440000,
+      "lastModifiedDateTime": "2026-10-24T16:20:00.000Z",
+      "createdDateTime": "2026-01-10T08:00:00.000Z",
+      "webUrl": "https://contoso.sharepoint.com/personal/sarah_chen/Documents/Financial_Strategy_2026",
+      "fileType": "folder",
+      "tags": [
+        "finance",
+        "strategy",
+        "q3",
+        "q4",
+        "executive"
+      ]
+    },
+    {
+      "id": "fold-contoso-eng",
+      "name": "Product Engineering & Cloud",
+      "accountId": "acc-contoso",
+      "accountName": "Contoso Global HQ (Business E5)",
+      "accountColor": "#0284c7",
+      "parentId": null,
+      "isFolder": true,
+      "size": 2655000,
+      "lastModifiedDateTime": "2026-10-22T11:15:00.000Z",
+      "createdDateTime": "2026-02-15T10:00:00.000Z",
+      "webUrl": "https://contoso.sharepoint.com/personal/sarah_chen/Documents/Engineering_Cloud",
+      "fileType": "folder",
+      "tags": [
+        "cloud",
+        "azure",
+        "dev",
+        "architecture"
+      ]
+    },
+    {
+      "id": "file-contoso-keynote",
+      "name": "Q4_Global_AllHands_Keynote.pptx",
+      "accountId": "acc-contoso",
+      "accountName": "Contoso Global HQ (Business E5)",
+      "accountColor": "#0284c7",
+      "parentId": null,
+      "isFolder": false,
+      "size": 13421772,
+      "lastModifiedDateTime": "2026-10-25T14:40:00.000Z",
+      "createdDateTime": "2026-10-15T09:00:00.000Z",
+      "webUrl": "https://contoso.sharepoint.com/personal/sarah_chen/Documents/Q4_Global_AllHands_Keynote.pptx",
+      "fileType": "presentation",
+      "starred": true,
+      "shared": true,
+      "tags": [
+        "all-hands",
+        "executive",
+        "keynote",
+        "q4"
+      ],
+      "content": "Contoso Global Keynote 2026: Accelerating Cloud Enterprise Solutions across global teams."
+    },
+    {
+      "id": "file-contoso-handbook",
+      "name": "Global_Employee_Handbook_2026.pdf",
+      "accountId": "acc-contoso",
+      "accountName": "Contoso Global HQ (Business E5)",
+      "accountColor": "#0284c7",
+      "parentId": null,
+      "isFolder": false,
+      "size": 4718592,
+      "lastModifiedDateTime": "2026-10-10T12:00:00.000Z",
+      "createdDateTime": "2026-01-01T08:00:00.000Z",
+      "webUrl": "https://contoso.sharepoint.com/personal/sarah_chen/Documents/Global_Employee_Handbook_2026.pdf",
+      "fileType": "pdf",
+      "starred": false,
+      "shared": true,
+      "tags": [
+        "hr",
+        "policy",
+        "compliance",
+        "onboarding"
+      ]
+    },
+    {
+      "id": "file-contoso-rev",
+      "name": "Q3_Consolidated_Revenue_Model.xlsx",
+      "accountId": "acc-contoso",
+      "accountName": "Contoso Global HQ (Business E5)",
+      "accountColor": "#0284c7",
+      "parentId": "fold-contoso-fin",
+      "isFolder": false,
+      "size": 1572864,
+      "lastModifiedDateTime": "2026-10-24T18:10:00.000Z",
+      "createdDateTime": "2026-09-30T10:00:00.000Z",
+      "webUrl": "https://contoso.sharepoint.com/personal/sarah_chen/Documents/Financial_Strategy_2026/Q3_Consolidated_Revenue_Model.xlsx",
+      "fileType": "spreadsheet",
+      "starred": true,
+      "tags": [
+        "finance",
+        "budget",
+        "revenue",
+        "excel"
+      ],
+      "content": "Regional Revenue Breakdown: North America ($142M), EMEA ($98M), APAC ($74M). YoY Growth: +24.8%."
+    },
+    {
+      "id": "file-contoso-exec",
+      "name": "Board_Executive_Summary_Q3.docx",
+      "accountId": "acc-contoso",
+      "accountName": "Contoso Global HQ (Business E5)",
+      "accountColor": "#0284c7",
+      "parentId": "fold-contoso-fin",
+      "isFolder": false,
+      "size": 860160,
+      "lastModifiedDateTime": "2026-10-23T09:20:00.000Z",
+      "createdDateTime": "2026-10-01T11:00:00.000Z",
+      "webUrl": "https://contoso.sharepoint.com/personal/sarah_chen/Documents/Financial_Strategy_2026/Board_Executive_Summary_Q3.docx",
+      "fileType": "document",
+      "tags": [
+        "board",
+        "executive",
+        "summary"
+      ],
+      "content": "Executive Summary for Board Meeting: Strong expansion in enterprise recurring revenue. Cloud infrastructure scaled to 99.995% uptime."
+    },
+    {
+      "id": "file-contoso-audit",
+      "name": "Deloitte_Independent_Audit_Report.pdf",
+      "accountId": "acc-contoso",
+      "accountName": "Contoso Global HQ (Business E5)",
+      "accountColor": "#0284c7",
+      "parentId": "fold-contoso-fin",
+      "isFolder": false,
+      "size": 3355443,
+      "lastModifiedDateTime": "2026-10-18T15:30:00.000Z",
+      "createdDateTime": "2026-09-15T09:00:00.000Z",
+      "webUrl": "https://contoso.sharepoint.com/personal/sarah_chen/Documents/Financial_Strategy_2026/Deloitte_Independent_Audit_Report.pdf",
+      "fileType": "pdf",
+      "tags": [
+        "audit",
+        "deloitte",
+        "compliance",
+        "finance"
+      ]
+    },
+    {
+      "id": "file-contoso-arch",
+      "name": "Enterprise_Cloud_Architecture_v4.png",
+      "accountId": "acc-contoso",
+      "accountName": "Contoso Global HQ (Business E5)",
+      "accountColor": "#0284c7",
+      "parentId": "fold-contoso-eng",
+      "isFolder": false,
+      "size": 2202009,
+      "lastModifiedDateTime": "2026-10-20T17:00:00.000Z",
+      "createdDateTime": "2026-08-10T14:00:00.000Z",
+      "webUrl": "https://contoso.sharepoint.com/personal/sarah_chen/Documents/Engineering_Cloud/Enterprise_Cloud_Architecture_v4.png",
+      "fileType": "image",
+      "tags": [
+        "diagram",
+        "architecture",
+        "azure",
+        "diagram"
+      ]
+    },
+    {
+      "id": "file-contoso-schema",
+      "name": "MicrosoftGraph_Integration_Spec.json",
+      "accountId": "acc-contoso",
+      "accountName": "Contoso Global HQ (Business E5)",
+      "accountColor": "#0284c7",
+      "parentId": "fold-contoso-eng",
+      "isFolder": false,
+      "size": 46080,
+      "lastModifiedDateTime": "2026-10-25T11:00:00.000Z",
+      "createdDateTime": "2026-10-20T10:00:00.000Z",
+      "webUrl": "https://contoso.sharepoint.com/personal/sarah_chen/Documents/Engineering_Cloud/MicrosoftGraph_Integration_Spec.json",
+      "fileType": "code",
+      "tags": [
+        "json",
+        "graph",
+        "api",
+        "openapi"
+      ],
+      "content": "{\n  \"service\": \"OneDrive for Business MultiDrive\",\n  \"version\": \"1.0.0\",\n  \"auth\": \"OAuth 2.0 PKCE / Authorization Code\",\n  \"scopes\": [\n    \"Files.ReadWrite.All\",\n    \"User.Read\",\n    \"offline_access\"\n  ]\n}"
+    },
+    {
+      "id": "fold-fab-contracts",
+      "name": "Client Contracts & NDAs",
+      "accountId": "acc-fabrikam",
+      "accountName": "Fabrikam Aerospace (Business Premium)",
+      "accountColor": "#10b981",
+      "parentId": null,
+      "isFolder": true,
+      "size": 5120000,
+      "lastModifiedDateTime": "2026-10-24T13:45:00.000Z",
+      "createdDateTime": "2026-03-01T09:00:00.000Z",
+      "webUrl": "https://fabrikamaero.sharepoint.com/personal/alex_vance/Documents/Contracts_NDAs",
+      "fileType": "folder",
+      "tags": [
+        "legal",
+        "contracts",
+        "nda",
+        "clients"
+      ]
+    },
+    {
+      "id": "fold-fab-telemetry",
+      "name": "Telemetry & Flight Datasets",
+      "accountId": "acc-fabrikam",
+      "accountName": "Fabrikam Aerospace (Business Premium)",
+      "accountColor": "#10b981",
+      "parentId": null,
+      "isFolder": true,
+      "size": 63440000,
+      "lastModifiedDateTime": "2026-10-21T07:30:00.000Z",
+      "createdDateTime": "2026-04-12T10:00:00.000Z",
+      "webUrl": "https://fabrikamaero.sharepoint.com/personal/alex_vance/Documents/Telemetry_Data",
+      "fileType": "folder",
+      "tags": [
+        "aerospace",
+        "telemetry",
+        "sensors",
+        "flight"
+      ]
+    },
+    {
+      "id": "file-fab-iso",
+      "name": "Security_Compliance_ISO27001_Audit.pdf",
+      "accountId": "acc-fabrikam",
+      "accountName": "Fabrikam Aerospace (Business Premium)",
+      "accountColor": "#10b981",
+      "parentId": null,
+      "isFolder": false,
+      "size": 1153433,
+      "lastModifiedDateTime": "2026-10-19T10:00:00.000Z",
+      "createdDateTime": "2026-05-15T08:00:00.000Z",
+      "webUrl": "https://fabrikamaero.sharepoint.com/personal/alex_vance/Documents/Security_Compliance_ISO27001_Audit.pdf",
+      "fileType": "pdf",
+      "shared": true,
+      "tags": [
+        "iso",
+        "security",
+        "compliance"
+      ]
+    },
+    {
+      "id": "file-fab-msa",
+      "name": "Master_Services_Agreement_Signed.pdf",
+      "accountId": "acc-fabrikam",
+      "accountName": "Fabrikam Aerospace (Business Premium)",
+      "accountColor": "#10b981",
+      "parentId": "fold-fab-contracts",
+      "isFolder": false,
+      "size": 2831155,
+      "lastModifiedDateTime": "2026-10-24T14:00:00.000Z",
+      "createdDateTime": "2026-10-01T09:00:00.000Z",
+      "webUrl": "https://fabrikamaero.sharepoint.com/personal/alex_vance/Documents/Contracts_NDAs/Master_Services_Agreement_Signed.pdf",
+      "fileType": "pdf",
+      "starred": true,
+      "tags": [
+        "contract",
+        "msa",
+        "legal"
+      ]
+    },
+    {
+      "id": "file-fab-rfp",
+      "name": "Defense_Avionics_Proposal_Rev3.docx",
+      "accountId": "acc-fabrikam",
+      "accountName": "Fabrikam Aerospace (Business Premium)",
+      "accountColor": "#10b981",
+      "parentId": "fold-fab-contracts",
+      "isFolder": false,
+      "size": 1887436,
+      "lastModifiedDateTime": "2026-10-23T16:15:00.000Z",
+      "createdDateTime": "2026-09-20T11:00:00.000Z",
+      "webUrl": "https://fabrikamaero.sharepoint.com/personal/alex_vance/Documents/Contracts_NDAs/Defense_Avionics_Proposal_Rev3.docx",
+      "fileType": "document",
+      "tags": [
+        "proposal",
+        "rfp",
+        "avionics"
+      ],
+      "content": "Technical specifications and cost modeling for Phase II Avionics telemetry systems."
+    },
+    {
+      "id": "file-fab-csv",
+      "name": "Flight_Test_Mach2_Telemetry.csv",
+      "accountId": "acc-fabrikam",
+      "accountName": "Fabrikam Aerospace (Business Premium)",
+      "accountColor": "#10b981",
+      "parentId": "fold-fab-telemetry",
+      "isFolder": false,
+      "size": 19293798,
+      "lastModifiedDateTime": "2026-10-21T07:45:00.000Z",
+      "createdDateTime": "2026-10-18T14:00:00.000Z",
+      "webUrl": "https://fabrikamaero.sharepoint.com/personal/alex_vance/Documents/Telemetry_Data/Flight_Test_Mach2_Telemetry.csv",
+      "fileType": "spreadsheet",
+      "tags": [
+        "csv",
+        "telemetry",
+        "mach2",
+        "data"
+      ],
+      "content": "timestamp,altitude_ft,mach_number,engine_temp_c,vibration_hz\n00:00:01,12000,0.85,640,12.4\n00:00:02,12500,0.92,655,13.1\n00:00:03,14200,1.20,710,14.8"
+    },
+    {
+      "id": "file-fab-zip",
+      "name": "Aero_CAD_Simulation_Payload.zip",
+      "accountId": "acc-fabrikam",
+      "accountName": "Fabrikam Aerospace (Business Premium)",
+      "accountColor": "#10b981",
+      "parentId": "fold-fab-telemetry",
+      "isFolder": false,
+      "size": 44145728,
+      "lastModifiedDateTime": "2026-10-15T12:00:00.000Z",
+      "createdDateTime": "2026-08-01T10:00:00.000Z",
+      "webUrl": "https://fabrikamaero.sharepoint.com/personal/alex_vance/Documents/Telemetry_Data/Aero_CAD_Simulation_Payload.zip",
+      "fileType": "archive",
+      "tags": [
+        "cad",
+        "zip",
+        "archive",
+        "simulation"
+      ]
+    },
+    {
+      "id": "fold-nw-trials",
+      "name": "Clinical Trials Cohort-B",
+      "accountId": "acc-northwind",
+      "accountName": "Northwind BioLabs (Research E3)",
+      "accountColor": "#8b5cf6",
+      "parentId": null,
+      "isFolder": true,
+      "size": 10880000,
+      "lastModifiedDateTime": "2026-10-25T09:15:00.000Z",
+      "createdDateTime": "2026-06-01T08:00:00.000Z",
+      "webUrl": "https://northwindbiolabs.sharepoint.com/personal/elena_rostova/Documents/Clinical_Trials_CohortB",
+      "fileType": "folder",
+      "tags": [
+        "clinical",
+        "trials",
+        "genomics",
+        "biomedical"
+      ]
+    },
+    {
+      "id": "file-nw-sop",
+      "name": "Lab_Operating_Procedures_SOP.pdf",
+      "accountId": "acc-northwind",
+      "accountName": "Northwind BioLabs (Research E3)",
+      "accountColor": "#8b5cf6",
+      "parentId": null,
+      "isFolder": false,
+      "size": 3984588,
+      "lastModifiedDateTime": "2026-10-14T11:00:00.000Z",
+      "createdDateTime": "2026-05-10T09:00:00.000Z",
+      "webUrl": "https://northwindbiolabs.sharepoint.com/personal/elena_rostova/Documents/Lab_Operating_Procedures_SOP.pdf",
+      "fileType": "pdf",
+      "starred": true,
+      "tags": [
+        "sop",
+        "lab",
+        "standard",
+        "procedure"
+      ]
+    },
+    {
+      "id": "file-nw-genomics",
+      "name": "Genomic_Sequencing_Summary_CohortB.csv",
+      "accountId": "acc-northwind",
+      "accountName": "Northwind BioLabs (Research E3)",
+      "accountColor": "#8b5cf6",
+      "parentId": "fold-nw-trials",
+      "isFolder": false,
+      "size": 9332244,
+      "lastModifiedDateTime": "2026-10-25T10:30:00.000Z",
+      "createdDateTime": "2026-10-10T14:00:00.000Z",
+      "webUrl": "https://northwindbiolabs.sharepoint.com/personal/elena_rostova/Documents/Clinical_Trials_CohortB/Genomic_Sequencing_Summary_CohortB.csv",
+      "fileType": "spreadsheet",
+      "tags": [
+        "genomics",
+        "dna",
+        "biotech",
+        "cohort"
+      ],
+      "content": "gene_id,sample_barcode,expression_fold_change,p_value,significance\nBRCA1,SAMP-0041,2.84,0.00012,HIGH\nTP53,SAMP-0042,0.41,0.00034,HIGH\nEGFR,SAMP-0043,1.95,0.0012,MODERATE"
+    },
+    {
+      "id": "file-nw-patent",
+      "name": "Patent_Draft_Enzyme_Catalysis_2026.docx",
+      "accountId": "acc-northwind",
+      "accountName": "Northwind BioLabs (Research E3)",
+      "accountColor": "#8b5cf6",
+      "parentId": "fold-nw-trials",
+      "isFolder": false,
+      "size": 2411724,
+      "lastModifiedDateTime": "2026-10-22T15:20:00.000Z",
+      "createdDateTime": "2026-09-05T10:00:00.000Z",
+      "webUrl": "https://northwindbiolabs.sharepoint.com/personal/elena_rostova/Documents/Clinical_Trials_CohortB/Patent_Draft_Enzyme_Catalysis_2026.docx",
+      "fileType": "document",
+      "tags": [
+        "patent",
+        "legal",
+        "biochem"
+      ],
+      "content": "Novel enzyme stabilization methods in high temperature biocatalysis. Claim 1: A thermally stable synthetic variant..."
+    }
+  ],
+  "adminPassword": "admin123",
+  "isDemoDismissed": false
+}
