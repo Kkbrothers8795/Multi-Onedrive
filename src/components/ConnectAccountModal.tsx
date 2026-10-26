@@ -60,6 +60,7 @@ export const ConnectAccountModal: React.FC<ConnectAccountModalProps> = ({
     const handleAuthMessage = async (event: MessageEvent) => {
       // Validate origin
       if (
+        event.origin !== window.location.origin &&
         !event.origin.endsWith('.run.app') &&
         !event.origin.includes('localhost') &&
         !event.origin.includes('127.0.0.1')

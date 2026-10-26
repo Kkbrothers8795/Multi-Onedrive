@@ -4,7 +4,6 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import dotenv from 'dotenv';
-import { INITIAL_ITEMS } from './src/data/seedDrives';
 
 dotenv.config();
 
@@ -12,8 +11,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+app.set('trust proxy', 1);
 const isProd = process.env.NODE_ENV === 'production';
-const port = isProd ? parseInt(process.env.PORT || '8080', 10) : 3000;
+const port = process.env.PORT ? parseInt(process.env.PORT, 10) : (isProd ? 8080 : 3000);
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -58,6 +58,10 @@ function loadStore() {
     let target = STORE_FILE;
     if (!fs.existsSync(target) && fs.existsSync('/tmp/server-store.json')) {
       target = '/tmp/server-store.json';
+    }
+    const bundledStore = path.resolve(__dirname, 'server-store.json');
+    if (!fs.existsSync(target) && fs.existsSync(bundledStore)) {
+      target = bundledStore;
     }
     if (fs.existsSync(target)) {
       const raw = fs.readFileSync(target, 'utf-8');
@@ -171,10 +175,9 @@ app.post('/api/auth/change-password', requireAdmin, (req: Request, res: Response
 // ==========================================
 // Returns public file metadata without requiring any login
 app.get('/api/public/file/:id', (req: Request, res: Response) => {
+  loadStore();
   const fileId = req.params.id;
-  const item =
-    serverStore.items.find((i) => i.id === fileId && !i.deleted) ||
-    INITIAL_ITEMS.find((i) => i.id === fileId && !i.deleted);
+  const item = serverStore.items.find((i) => i.id === fileId && !i.deleted);
 
   if (!item) {
     return res.status(404).json({ error: 'File not found or has been removed' });
@@ -199,10 +202,9 @@ app.get('/api/public/file/:id', (req: Request, res: Response) => {
 
 // Direct public download link (streams file or content without login)
 app.get('/api/public/download/:id', (req: Request, res: Response) => {
+  loadStore();
   const fileId = req.params.id;
-  const item =
-    serverStore.items.find((i) => i.id === fileId && !i.deleted) ||
-    INITIAL_ITEMS.find((i) => i.id === fileId && !i.deleted);
+  const item = serverStore.items.find((i) => i.id === fileId && !i.deleted);
 
   if (!item) {
     return res.status(404).send('File not found or link has expired');
@@ -224,6 +226,7 @@ app.get('/api/public/download/:id', (req: Request, res: Response) => {
 // SERVER STORAGE SYNC (PERSISTS ACCOUNTS)
 // ==========================================
 app.get('/api/storage/data', (req: Request, res: Response) => {
+  loadStore();
   res.json({
     accounts: serverStore.accounts,
     items: serverStore.items,
@@ -464,7 +467,10 @@ async function startServer() {
   if (!isProd) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        allowedHosts: true,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
