@@ -404,10 +404,21 @@ app.post('/api/auth/token', async (req: Request, res: Response) => {
       body: bodyParams.toString(),
     });
 
-    const data = await tokenRes.json();
-    if (!tokenRes.ok) {
-      return res.status(tokenRes.status).json({
-        error: data.error_description || data.error || 'Failed to exchange token with Microsoft',
+    const data = await tokenRes.json().catch(() => null);
+    if (!tokenRes.ok || !data) {
+      const errorMsg =
+        typeof data?.error_description === 'string' && data.error_description
+          ? data.error_description
+          : typeof data?.error === 'string' && data.error
+          ? data.error
+          : typeof data?.error?.message === 'string' && data.error.message
+          ? `[${data.error.code || 'Error'}] ${data.error.message}`
+          : typeof data?.message === 'string' && data.message
+          ? data.message
+          : 'Failed to exchange authorization code with Microsoft';
+
+      return res.status(tokenRes.status || 400).json({
+        error: errorMsg,
         details: data,
       });
     }
@@ -450,7 +461,24 @@ app.post('/api/graph/proxy', async (req: Request, res: Response) => {
 
     const contentType = graphRes.headers.get('content-type') || '';
     if (contentType.includes('application/json')) {
-      const data = await graphRes.json();
+      const data = await graphRes.json().catch(() => ({}));
+      if (!graphRes.ok) {
+        const errorMsg =
+          typeof data?.error?.message === 'string' && data.error.message
+            ? `[${data.error.code || 'GraphError'}] ${data.error.message}`
+            : typeof data?.error_description === 'string' && data.error_description
+            ? data.error_description
+            : typeof data?.error === 'string' && data.error
+            ? data.error
+            : typeof data?.message === 'string' && data.message
+            ? data.message
+            : `Microsoft Graph returned status ${graphRes.status}`;
+
+        return res.status(graphRes.status).json({
+          error: errorMsg,
+          details: data,
+        });
+      }
       return res.status(graphRes.status).json(data);
     } else {
       const text = await graphRes.text();

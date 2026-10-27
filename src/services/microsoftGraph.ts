@@ -1,5 +1,6 @@
 import { DriveAccount, DriveItem } from '../types/drive';
 import { getFileCategory } from '../utils/driveLogic';
+import { extractErrorMessage } from '../utils/formatError';
 
 /**
  * Microsoft Graph API Client for OneDrive for Business
@@ -40,7 +41,9 @@ export class MicrosoftGraphService {
 
       if (!res.ok) {
         // Try server proxy fallback if 401/403 or network error
-        throw new Error(`Graph API returned ${res.status}: ${res.statusText}`);
+        const errorJson = await res.json().catch(() => null);
+        const errMsg = errorJson ? extractErrorMessage(errorJson) : `Graph API returned ${res.status}: ${res.statusText}`;
+        throw new Error(errMsg);
       }
 
       if (isBinary) {
@@ -68,8 +71,11 @@ export class MicrosoftGraphService {
       });
 
       if (!proxyRes.ok) {
-        const errorData = await proxyRes.json().catch(() => ({ error: 'Proxy request failed' }));
-        throw new Error(errorData.error || `Graph request failed with status ${proxyRes.status}`);
+        const errorData = await proxyRes.json().catch(() => null);
+        const errMsg = errorData
+          ? extractErrorMessage(errorData, `Graph request failed with status ${proxyRes.status}`)
+          : `Graph request failed with status ${proxyRes.status}`;
+        throw new Error(errMsg);
       }
 
       return await proxyRes.json().catch(() => ({ status: 'ok' }));

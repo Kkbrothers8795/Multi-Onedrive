@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { DriveAccount } from '../types/drive';
 import { MicrosoftGraphService } from '../services/microsoftGraph';
+import { extractErrorMessage } from '../utils/formatError';
 
 interface ConnectAccountModalProps {
   isOpen: boolean;
@@ -89,13 +90,23 @@ export const ConnectAccountModal: React.FC<ConnectAccountModalProps> = ({
             }),
           });
 
-          const tokenData = await tokenRes.json();
-          if (!tokenRes.ok) {
-            throw new Error(tokenData.error || 'Failed to exchange authorization code');
+          const tokenData = await tokenRes.json().catch(() => null);
+          if (!tokenRes.ok || !tokenData) {
+            const errorMsg = extractErrorMessage(
+              tokenData,
+              `Token exchange failed with status ${tokenRes.status}`
+            );
+            throw new Error(errorMsg);
           }
 
           const accessToken = tokenData.access_token;
           const refreshToken = tokenData.refresh_token;
+
+          if (!accessToken) {
+            throw new Error(
+              extractErrorMessage(tokenData, 'Microsoft did not return an access token')
+            );
+          }
 
           // Fetch user profile and drive quota from Microsoft Graph
           const profile = await MicrosoftGraphService.getUserProfile(accessToken);
@@ -127,12 +138,16 @@ export const ConnectAccountModal: React.FC<ConnectAccountModalProps> = ({
           onClose();
         } catch (err: any) {
           console.error('Account connection failed:', err);
-          setAuthError(err.message || 'Failed to complete OAuth authentication');
+          setAuthError(extractErrorMessage(err, 'Failed to complete OAuth authentication'));
         } finally {
           setIsConnecting(false);
         }
       } else if (event.data?.type === 'OAUTH_AUTH_ERROR') {
-        setAuthError(event.data.errorDescription || event.data.error || 'Authentication rejected by Microsoft');
+        const errorMsg = extractErrorMessage(
+          event.data.errorDescription || event.data.error,
+          'Authentication was cancelled or rejected by Microsoft'
+        );
+        setAuthError(errorMsg);
         setIsConnecting(false);
       }
     };
@@ -304,12 +319,44 @@ export const ConnectAccountModal: React.FC<ConnectAccountModalProps> = ({
               </div>
 
               {authError && (
-                <div className="p-3 rounded-xl bg-rose-950/60 border border-rose-800/80 text-xs text-rose-300 flex items-start gap-2">
-                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                  <div>
-                    <strong className="font-semibold">Authentication Error:</strong>
-                    <p className="mt-0.5">{authError}</p>
+                <div className="p-3.5 rounded-xl bg-rose-950/70 border border-rose-800 text-xs text-rose-200 space-y-2">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-rose-400" />
+                    <div className="flex-1 break-words">
+                      <strong className="font-semibold text-rose-300">Authentication Error:</strong>
+                      <p className="mt-1 leading-relaxed font-mono text-[11px] bg-black/40 p-2 rounded-lg border border-rose-900/60 select-all">
+                        {extractErrorMessage(authError)}
+                      </p>
+                    </div>
                   </div>
+
+                  {(authError.includes('AADSTS50011') || authError.toLowerCase().includes('redirect_uri')) && (
+                    <div className="p-2.5 rounded-lg bg-sky-950/70 border border-sky-800/80 text-[11px] text-sky-200 space-y-1">
+                      <p className="font-semibold text-sky-300">Redirect URI Mismatch Fix (AADSTS50011):</p>
+                      <p className="text-slate-300">
+                        In Azure Portal &gt; App registrations &gt; your app &gt; <strong>Authentication</strong>, add this exact Web Redirect URI:
+                      </p>
+                      <div className="flex items-center justify-between gap-2 font-mono text-sky-300 bg-slate-900 px-2 py-1 rounded border border-slate-700">
+                        <span className="truncate">{redirectUri}</span>
+                        <button
+                          type="button"
+                          onClick={copyRedirectUri}
+                          className="text-xs px-2 py-0.5 rounded bg-sky-800 hover:bg-sky-700 text-white shrink-0"
+                        >
+                          {copiedUri ? 'Copied' : 'Copy'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {(authError.includes('AADSTS7000215') || authError.toLowerCase().includes('client_secret')) && (
+                    <div className="p-2.5 rounded-lg bg-amber-950/70 border border-amber-800/80 text-[11px] text-amber-200">
+                      <strong className="text-amber-300">Client Secret Fix:</strong>
+                      <p className="mt-0.5 text-slate-300">
+                        In Azure Portal &gt; App registrations &gt; <strong>Certificates &amp; secrets</strong>, generate a new Client Secret Value and paste it into the Client Secret field below.
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
 
