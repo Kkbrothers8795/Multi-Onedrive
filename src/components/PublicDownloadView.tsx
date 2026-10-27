@@ -33,10 +33,17 @@ export const PublicDownloadView: React.FC<PublicDownloadViewProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
 
+  // Security & PIN state
+  const [requiresPin, setRequiresPin] = useState(false);
+  const [enteredPin, setEnteredPin] = useState('');
+  const [pinError, setPinError] = useState<string | null>(null);
+  const [verifyingPin, setVerifyingPin] = useState(false);
+  const [unlockedPin, setUnlockedPin] = useState<string | null>(null);
+
   useEffect(() => {
     // Check cached items first
     const localMatch = cachedItems.find((i) => i.id === fileId);
-    if (localMatch) {
+    if (localMatch && !localMatch.sharePin && !localMatch.expiresAt) {
       setItem(localMatch);
       setLoading(false);
       return;
@@ -44,11 +51,23 @@ export const PublicDownloadView: React.FC<PublicDownloadViewProps> = ({
 
     // Otherwise fetch public metadata from server endpoint
     fetch(`/api/public/file/${encodeURIComponent(fileId)}`)
-      .then((res) => {
-        if (!res.ok) throw new Error('Shared file not found or link has expired');
-        return res.json();
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 410 || data.isExpired) {
+          throw new Error('This shared link has expired and is no longer available.');
+        }
+        if (!res.ok && res.status !== 401) {
+          throw new Error(data.error || 'Shared file not found or has been removed');
+        }
+        return data;
       })
       .then((data) => {
+        if (data.requiresPin) {
+          setRequiresPin(true);
+          setItem(data);
+          setLoading(false);
+          return;
+        }
         setItem(data);
         setLoading(false);
       })
@@ -59,7 +78,7 @@ export const PublicDownloadView: React.FC<PublicDownloadViewProps> = ({
           if (stored) {
             const parsed = JSON.parse(stored);
             const found = parsed.find((i: any) => i.id === fileId);
-            if (found) {
+            if (found && !found.sharePin) {
               setItem(found);
               setLoading(false);
               return;
@@ -71,16 +90,56 @@ export const PublicDownloadView: React.FC<PublicDownloadViewProps> = ({
       });
   }, [fileId, cachedItems]);
 
+  const handleVerifyPin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!enteredPin.trim()) {
+      setPinError('Please enter the security PIN');
+      return;
+    }
+    setVerifyingPin(true);
+    setPinError(null);
+
+    try {
+      const res = await fetch(`/api/public/verify-pin/${encodeURIComponent(fileId)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: enteredPin.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.verified) {
+        setPinError(data.error || 'Incorrect security PIN. Please try again.');
+        return;
+      }
+
+      // Fetch full file metadata with PIN header
+      const metaRes = await fetch(`/api/public/file/${encodeURIComponent(fileId)}?pin=${encodeURIComponent(enteredPin.trim())}`);
+      const meta = await metaRes.json();
+      setItem(meta);
+      setUnlockedPin(enteredPin.trim());
+      setRequiresPin(false);
+    } catch {
+      setPinError('Connection error while validating security PIN');
+    } finally {
+      setVerifyingPin(false);
+    }
+  };
+
   const handleDownload = () => {
     if (!item) return;
     setDownloading(true);
 
     try {
-      if (item.downloadUrl) {
-        window.location.href = item.downloadUrl;
+      if (item.downloadUrl && item.downloadUrl.startsWith('data:')) {
+        const link = document.createElement('a');
+        link.href = item.downloadUrl;
+        link.download = item.name;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
       } else {
-        // Direct public download link
-        window.location.href = `/api/public/download/${encodeURIComponent(item.id)}`;
+        // Route strictly through site permanent streaming proxy (with PIN if protected)
+        const pinParam = unlockedPin ? `?pin=${encodeURIComponent(unlockedPin)}` : '';
+        window.location.href = `/api/public/download/${encodeURIComponent(item.id)}${pinParam}`;
       }
     } finally {
       setTimeout(() => setDownloading(false), 2000);
@@ -97,7 +156,7 @@ export const PublicDownloadView: React.FC<PublicDownloadViewProps> = ({
           </div>
           <div>
             <h1 className="text-sm font-semibold text-slate-100">MultiDrive Public File Access</h1>
-            <p className="text-[11px] text-slate-400">Direct Download • No Login Required</p>
+            <p className="text-[11px] text-slate-400">Direct Download • Lifetime Site Streaming</p>
           </div>
         </div>
 
@@ -118,16 +177,14 @@ export const PublicDownloadView: React.FC<PublicDownloadViewProps> = ({
             <div className="w-8 h-8 border-3 border-sky-500 border-t-transparent rounded-full animate-spin mx-auto" />
             <p className="text-xs text-slate-400">Locating shared file on OneDrive...</p>
           </div>
-        ) : error || !item ? (
+        ) : error ? (
           <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center space-y-4 shadow-2xl">
             <div className="w-12 h-12 rounded-full bg-rose-950/60 border border-rose-800/80 text-rose-400 flex items-center justify-center mx-auto">
               <AlertCircle className="w-6 h-6" />
             </div>
             <div>
               <h2 className="text-sm font-semibold text-slate-100">File Not Available</h2>
-              <p className="text-xs text-slate-400 mt-1">
-                {error || 'This shared file link is invalid, was deleted by the owner, or has expired.'}
-              </p>
+              <p className="text-xs text-slate-400 mt-1">{error}</p>
             </div>
             <button
               type="button"
@@ -137,7 +194,69 @@ export const PublicDownloadView: React.FC<PublicDownloadViewProps> = ({
               Go to Home / Admin Login
             </button>
           </div>
-        ) : (
+        ) : requiresPin && item ? (
+          /* Password / PIN Prompt Screen */
+          <div className="max-w-md w-full bg-slate-900 border border-amber-800/60 rounded-3xl p-7 shadow-2xl space-y-5 text-center animate-fadeIn">
+            <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-400 flex items-center justify-center mx-auto shadow-inner">
+              <Lock className="w-7 h-7" />
+            </div>
+
+            <div>
+              <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                Password Protected File
+              </span>
+              <h2 className="text-base font-bold text-slate-100 mt-2 truncate" title={item.name}>
+                {item.name}
+              </h2>
+              <p className="text-xs text-slate-400 mt-1">
+                The owner has secured this file. Enter the PIN or passphrase to preview and download.
+              </p>
+            </div>
+
+            <form onSubmit={handleVerifyPin} className="space-y-4 text-left">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-slate-300">Security PIN / Passphrase</label>
+                <div className="relative">
+                  <input
+                    type="password"
+                    value={enteredPin}
+                    onChange={(e) => {
+                      setEnteredPin(e.target.value);
+                      setPinError(null);
+                    }}
+                    placeholder="Enter PIN..."
+                    autoFocus
+                    className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-sm text-slate-100 focus:outline-none focus:border-amber-500 tracking-wider font-mono placeholder:tracking-normal placeholder:font-sans"
+                  />
+                </div>
+                {pinError && (
+                  <p className="text-[11px] text-rose-400 flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3 h-3 shrink-0" />
+                    <span>{pinError}</span>
+                  </p>
+                )}
+              </div>
+
+              <button
+                type="submit"
+                disabled={verifyingPin}
+                className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-white font-semibold text-xs shadow-lg shadow-amber-600/20 flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+              >
+                {verifyingPin ? (
+                  <>
+                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <span>Verifying PIN...</span>
+                  </>
+                ) : (
+                  <>
+                    <ShieldCheck className="w-4 h-4" />
+                    <span>Unlock &amp; Access File</span>
+                  </>
+                )}
+              </button>
+            </form>
+          </div>
+        ) : item ? (
           <div className="max-w-xl w-full bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6">
             {/* File Header */}
             <div className="flex items-start gap-4">
@@ -218,7 +337,7 @@ export const PublicDownloadView: React.FC<PublicDownloadViewProps> = ({
               <span>MultiDrive Cloud</span>
             </div>
           </div>
-        )}
+        ) : null}
       </main>
     </div>
   );

@@ -2,6 +2,11 @@
   "version": 2,
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
+  "functions": {
+    "api/index.ts": {
+      "includeFiles": "server-store.json"
+    }
+  },
   "rewrites": [
     {
       "source": "/api/(.*)",
@@ -9,6 +14,10 @@
     },
     {
       "source": "/auth/(.*)",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/webdav(.*)",
       "destination": "/api/index.ts"
     },
     {

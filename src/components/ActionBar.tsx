@@ -12,6 +12,8 @@ import {
   ChevronRight,
   HardDrive,
   CheckSquare,
+  Cloud,
+  Zap,
 } from 'lucide-react';
 import { ViewMode, SortField, SortOrder, DriveAccount } from '../types/drive';
 
@@ -29,12 +31,15 @@ interface ActionBarProps {
   onNewFolderClick: () => void;
   onBatchDownloadZip: () => void;
   onBatchMoveClick: () => void;
+  onBatchMigrateClick?: () => void;
   onBatchDeleteClick: () => void;
   onClearSelection: () => void;
   onSelectAll: () => void;
   isAllSelected: boolean;
   totalVisibleCount: number;
   currentAccount?: DriveAccount;
+  loadBalancingEnabled?: boolean;
+  onToggleLoadBalancing?: () => void;
 }
 
 export const ActionBar: React.FC<ActionBarProps> = ({
@@ -51,12 +56,15 @@ export const ActionBar: React.FC<ActionBarProps> = ({
   onNewFolderClick,
   onBatchDownloadZip,
   onBatchMoveClick,
+  onBatchMigrateClick,
   onBatchDeleteClick,
   onClearSelection,
   onSelectAll,
   isAllSelected,
   totalVisibleCount,
   currentAccount,
+  loadBalancingEnabled,
+  onToggleLoadBalancing,
 }) => {
   return (
     <div className="bg-slate-900/60 border-b border-slate-800 px-4 py-2.5 flex flex-wrap items-center justify-between gap-3">
@@ -103,12 +111,24 @@ export const ActionBar: React.FC<ActionBarProps> = ({
             <button
               type="button"
               onClick={onBatchMoveClick}
-              title="Move or transfer files to another folder or account"
+              title="Move or transfer files to another folder"
               className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors"
             >
               <FolderInput className="w-3 h-3 text-amber-400" />
               <span>Move</span>
             </button>
+
+            {onBatchMigrateClick && (
+              <button
+                type="button"
+                onClick={onBatchMigrateClick}
+                title="Migrate files directly across OneDrive accounts via cloud conduit"
+                className="flex items-center gap-1 px-2 py-1 rounded-lg bg-indigo-950/80 hover:bg-indigo-900 text-indigo-200 border border-indigo-800/60 transition-colors"
+              >
+                <Cloud className="w-3 h-3 text-indigo-400" />
+                <span>Migrate</span>
+              </button>
+            )}
 
             <button
               type="button"
@@ -149,6 +169,27 @@ export const ActionBar: React.FC<ActionBarProps> = ({
               <FolderPlus className="w-3.5 h-3.5 text-amber-400" />
               <span>New Folder</span>
             </button>
+
+            {onToggleLoadBalancing && (
+              <button
+                type="button"
+                onClick={onToggleLoadBalancing}
+                title={
+                  loadBalancingEnabled
+                    ? 'Auto Load Balancing: ACTIVE (automatically routes uploads to the OneDrive account with most free space)'
+                    : 'Auto Load Balancing: OFF (uploads to selected account)'
+                }
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium border transition-all ${
+                  loadBalancingEnabled
+                    ? 'bg-amber-500/15 text-amber-300 border-amber-500/40 shadow-sm'
+                    : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-300'
+                }`}
+              >
+                <Zap className={`w-3.5 h-3.5 ${loadBalancingEnabled ? 'text-amber-400' : 'text-slate-500'}`} />
+                <span className="hidden sm:inline">Auto Balancing</span>
+                <span className={`w-1.5 h-1.5 rounded-full ${loadBalancingEnabled ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
+              </button>
+            )}
           </div>
         )}
 

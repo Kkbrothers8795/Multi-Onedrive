@@ -16,6 +16,8 @@ import {
   applyDeltaChanges,
   getAccountStorageDistribution,
   calculateStorageByCategory,
+  findBestAccountForUpload,
+  migrateItemsAcrossAccounts,
 } from './driveLogic';
 import { DriveItem, DriveAccount } from '../types/drive';
 
@@ -225,4 +227,31 @@ test('calculateStorageByCategory aggregates bytes and item counts by file type',
   assert.equal(categories[1].category, 'spreadsheet');
   assert.equal(categories[1].count, 1);
 });
+
+test('findBestAccountForUpload correctly chooses the drive with highest remaining capacity', () => {
+  // acc-1 has 805 GB free; acc-2 has 536 GB free
+  const best = findBestAccountForUpload(sampleAccounts, 1024 * 1024 * 50);
+  assert.ok(best);
+  assert.equal(best?.account.id, 'acc-1');
+  assert.ok(best?.freeBytes > 700000000000);
+});
+
+test('migrateItemsAcrossAccounts handles move and copy modes', () => {
+  const targetAcc = sampleAccounts[1]; // Fabrikam
+  // Test move mode
+  const moveRes = migrateItemsAcrossAccounts(sampleItems, ['doc-1'], targetAcc, 'move');
+  assert.equal(moveRes.migratedCount, 1);
+  const movedItem = moveRes.updatedItems.find((i) => i.id === 'doc-1');
+  assert.equal(movedItem?.accountId, 'acc-2');
+  assert.equal(movedItem?.accountName, 'Fabrikam Aerospace');
+
+  // Test copy mode
+  const copyRes = migrateItemsAcrossAccounts(sampleItems, ['doc-1'], targetAcc, 'copy');
+  assert.equal(copyRes.migratedCount, 1);
+  assert.equal(copyRes.updatedItems.length, sampleItems.length + 1);
+  const copied = copyRes.updatedItems.find((i) => i.name.startsWith('Copy of '));
+  assert.ok(copied);
+  assert.equal(copied?.accountId, 'acc-2');
+});
+
 

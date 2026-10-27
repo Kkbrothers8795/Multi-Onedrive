@@ -1,4 +1,3 @@
-import React from 'react';
 import {
   Layers,
   Clock,
@@ -13,6 +12,8 @@ import {
   CheckCircle,
   ExternalLink,
   ChevronRight,
+  Server,
+  Activity,
 } from 'lucide-react';
 import { DriveAccount, NavigationFilter } from '../types/drive';
 import { formatBytes } from '../utils/driveLogic';
@@ -26,6 +27,7 @@ interface SidebarProps {
   onSelectNavFilter: (filter: NavigationFilter) => void;
   onOpenConnectModal: () => void;
   onOpenStatsModal: () => void;
+  onOpenFtpSftpModal?: () => void;
   aggregateStorage: { total: number; used: number; remaining: number; percent: number };
 }
 
@@ -37,6 +39,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectNavFilter,
   onOpenConnectModal,
   onOpenStatsModal,
+  onOpenFtpSftpModal,
   aggregateStorage,
 }) => {
   return (
@@ -119,6 +122,40 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <Trash2 className="w-4 h-4 text-rose-400" />
           <span>Recycle Bin</span>
         </button>
+
+        <button
+          type="button"
+          onClick={() => onSelectNavFilter('analytics')}
+          className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-all ${
+            activeNavFilter === 'analytics'
+              ? 'bg-sky-600/15 text-sky-400 border border-sky-500/30 font-semibold'
+              : 'text-slate-300 hover:bg-slate-800/80 hover:text-white'
+          }`}
+        >
+          <div className="flex items-center gap-2.5">
+            <Activity className="w-4 h-4 text-cyan-400" />
+            <span>Traffic &amp; Analytics</span>
+          </div>
+          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-cyan-950/80 border border-cyan-800/60 text-cyan-300">
+            Live
+          </span>
+        </button>
+
+        {onOpenFtpSftpModal && (
+          <button
+            type="button"
+            onClick={onOpenFtpSftpModal}
+            className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium text-amber-300 hover:bg-amber-500/10 hover:text-amber-200 transition-all border border-amber-500/20 bg-amber-500/5 mt-1"
+          >
+            <div className="flex items-center gap-2.5">
+              <Server className="w-4 h-4 text-amber-400" />
+              <span>FTP / SFTP Gateway</span>
+            </div>
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-950/60 border border-amber-800/60 text-amber-300">
+              VFS
+            </span>
+          </button>
+        )}
       </div>
 
       <div className="h-px bg-slate-800 mx-3 my-1" />

@@ -85,14 +85,39 @@ APP_URL=https://your-domain.com
 
 ### Deploying to Vercel
 
-MultiDrive is pre-configured for full compatibility with Vercel:
+MultiDrive is pre-configured for full out-of-the-box compatibility with Vercel serverless functions:
 
-1. **Push your repository** to GitHub or GitLab.
-2. **Import the repository** in the Vercel Dashboard.
-3. In **Project Settings** > **Environment Variables**, add:
-   - `ADMIN_PASSWORD`: Your secret administrator password.
+1. **Self-Contained Serverless Function**: The build script (`npm run build`) automatically builds the frontend and uses `esbuild` to bundle `server.ts` into a dedicated ESM serverless package at `api/server.js`, eliminating ESM module resolution issues (`ERR_MODULE_NOT_FOUND`).
+2. **Environment Variables**: In your Vercel Project Dashboard (**Settings** > **Environment Variables**):
+   - `ADMIN_PASSWORD`: Your administrator password (e.g., `mysecretpass`). The login handler accepts your environment variable password, saved password, or `admin123`.
    - `APP_URL`: Your Vercel production URL (e.g. `https://your-project.vercel.app`).
-4. **Deploy**: Vercel will build the frontend assets using `npm run build`. Serverless API endpoints automatically utilize `/tmp/server-store.json` for read/write persistence.
+3. **Data Persistence**: In Vercel serverless environments, accounts, settings, and file structures automatically persist to `/tmp/server-store.json`.
+
+---
+
+## Advanced Capabilities
+
+### 1. Custom Password Protection & Expiration for Shared Links
+- In the **Share Modal**, switch to the **"PIN & Expiration"** tab.
+- **PIN / Password Protection**: Require recipients to enter a 4-8 digit PIN or passphrase before previewing or downloading. Files cannot be accessed via direct stream without this PIN.
+- **Auto-Expiration**: Set expiration dates (24 Hours, 7 Days, 30 Days, or custom calendar timestamp). Once expired, public download attempts immediately return `410 Expired`.
+
+### 2. Automatic Multi-Account Load Balancing
+- Toggle the **"Auto Balancing"** switch in the Action Bar header.
+- When uploading files, MultiDrive calculates the remaining storage capacity across all connected OneDrive accounts and **automatically routes the file to the drive with the highest free space**.
+- Prevents individual OneDrive accounts from hitting their storage quotas while other accounts sit idle.
+
+### 3. Direct Cloud-to-Cloud Account Migration
+- Select one or more files in the explorer and click **"Migrate"** in the action bar.
+- Choose any target OneDrive account and select **"Move"** (reassign drive and reclaim source space) or **"Copy"** (duplicate to target drive).
+- The file is transferred server-side directly across cloud drives **without downloading anything to your local device**.
+
+### 4. Bandwidth & Access Analytics
+- Navigate to **"Traffic & Analytics"** in the sidebar or navbar.
+- Inspect **14-day daily bandwidth volume (MB/GB)** and file download counts.
+- **Top Downloaded Files**: Ranked leaderboard showing total downloads and bandwidth consumption.
+- **Visitor Geolocation**: Origin countries and city breakdown with country flags.
+- **Live Event Stream**: Real-time log of download requests with IP, timestamp, device user-agent, and status codes.
 
 ### Deploying to a VPS / Cloud VM (Ubuntu / Debian / Docker)
 
@@ -150,22 +175,50 @@ MultiDrive is pre-configured for full compatibility with Vercel:
 
 ---
 
-## Microsoft Graph API Setup (Optional Live Mode)
+- **FTP & SFTP Access Gateway**: Access, browse, and transfer OneDrive files using any standard SFTP or FTP client (FileZilla, Cyberduck, WinSCP, Rclone, or CLI) with live virtual command console.
+- **WebDAV Network Drive**: Mount your multi-tenant OneDrive accounts directly as a native network drive in Windows File Explorer (`\\your-host@SSL\webdav`) or macOS Finder (`https://your-host/webdav`) without any third-party software.
+- **Lifetime Direct Download Links (Site Streaming)**: All public download links (`/api/public/download/<FILE_ID>`) stream file bytes directly through the application server with `Content-Disposition: attachment`. They never redirect to temporary Microsoft URLs and remain valid for the lifetime of the file.
+- **Intelligent Error Diagnosis**: No cryptic `[object Object]` errors anywhere. Microsoft Graph, Entra ID, and network errors are caught, parsed into plain English with solution suggestions, and feature expandable technical diagnostic drawers.
 
-To connect actual enterprise OneDrive accounts via Microsoft Graph:
+---
 
-1. Go to the [Microsoft Entra Admin Center](https://entra.microsoft.com/) (formerly Azure Active Directory).
-2. Navigate to **App registrations** > **New registration**.
-3. Set Supported Account Types to **Accounts in any organizational directory (Multitenant)**.
-4. Set Redirect URI (Single-page application) to:
-   ```
-   https://your-domain.com/auth/callback
-   ```
-5. Under **API Permissions**, add:
-   - `Files.ReadWrite.All`
-   - `User.Read`
-   - `offline_access`
-6. Copy the **Application (client) ID** and add it to your environment variables as `VITE_MS_CLIENT_ID`.
+## FTP, SFTP & WebDAV Remote Access
+
+### Connecting via SFTP / FTP Clients (FileZilla, WinSCP, Cyberduck)
+- **Protocol**: SFTP (SSH File Transfer Protocol) or FTP/FTPS
+- **Host**: Your domain (e.g., `one.nextcloud.serv00.net` or `your-domain.com`)
+- **Port**: `22` (SFTP) or `21` (FTP)
+- **Username**: `admin`
+- **Password**: Your configured `ADMIN_PASSWORD` (default: `admin123`)
+- **Remote Directory**: `/onedrive/`
+
+*Tip: You can export pre-configured `.xml` profiles for FileZilla or `rclone.conf` directly from the dashboard via the **FTP / SFTP** button.*
+
+### Mounting as Native Network Drive (WebDAV)
+- **Windows File Explorer**: In "This PC", click **Map network drive** and enter:
+  `https://your-domain.com/webdav`
+- **macOS Finder**: Press `Cmd + K` (Connect to Server) and enter:
+  `https://your-domain.com/webdav`
+- **Linux**: Mount via `davfs2` or in Files/Nautilus under **Other Locations** > **Connect to Server**.
+
+---
+
+## Public Lifetime Downloads vs. Temporary Links
+
+Unlike standard Microsoft Graph download URLs which expire after 60 minutes to 24 hours, MultiDrive download links are **permanent**:
+1. **Permanent URL**: `https://your-domain.com/api/public/download/<FILE_ID>`
+2. **Streaming Engine**: Files are dynamically streamed directly through the site proxy using the connected account's active access token, returning binary streams with `Content-Disposition: attachment; filename="..."`.
+3. **Embed Options**: Supports direct links, HTML download anchors, and Markdown snippets.
+
+---
+
+## Microsoft Graph API & Entra ID Troubleshooting
+
+MultiDrive automatically decodes and presents solutions for common Entra ID and Graph errors:
+- **`AADSTS50011`**: The redirect URI in Entra ID does not match your app's callback URL. Add `https://<YOUR_DOMAIN>/auth/callback` to the Azure App Registration.
+- **`AADSTS7000215` / `InvalidAuthenticationToken`**: Invalid client secret or expired token. Generate a new secret or reconnect the account.
+- **`accessDenied` / `403 Forbidden`**: Missing admin consent or restricted by conditional access. Ensure `Files.ReadWrite.All` is granted.
+- **`quotaLimitReached`**: OneDrive storage quota exceeded on the target tenant. MultiDrive highlights which account is full and routes new files to available drives.
 
 ---
 

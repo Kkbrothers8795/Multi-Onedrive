@@ -11,6 +11,8 @@ import {
   AlertCircle,
   X,
   LogOut,
+  Server,
+  Activity,
 } from 'lucide-react';
 import { DriveAccount } from '../types/drive';
 import { formatBytes } from '../utils/driveLogic';
@@ -29,6 +31,8 @@ interface NavbarProps {
   onOpenConnectModal: () => void;
   onOpenActivityLog: () => void;
   onOpenStatsModal?: () => void;
+  onOpenFtpSftpModal?: () => void;
+  onOpenAnalytics?: () => void;
   onLogout?: () => void;
   aggregateStorage: { total: number; used: number; remaining: number; percent: number };
 }
@@ -47,6 +51,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenConnectModal,
   onOpenActivityLog,
   onOpenStatsModal,
+  onOpenFtpSftpModal,
+  onOpenAnalytics,
   onLogout,
   aggregateStorage,
 }) => {
@@ -174,6 +180,34 @@ export const Navbar: React.FC<NavbarProps> = ({
           >
             <History className="w-4 h-4" />
           </button>
+
+          {/* FTP & SFTP Gateway Trigger */}
+          {onOpenFtpSftpModal && (
+            <button
+              type="button"
+              onClick={onOpenFtpSftpModal}
+              aria-label="FTP / SFTP and Network Drive Settings"
+              title="FTP / SFTP & Network Drive Gateway"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-semibold transition-all shadow-sm"
+            >
+              <Server className="w-3.5 h-3.5 text-amber-400" />
+              <span className="hidden md:inline">FTP / SFTP</span>
+            </button>
+          )}
+
+          {/* Analytics Dashboard Trigger */}
+          {onOpenAnalytics && (
+            <button
+              type="button"
+              onClick={onOpenAnalytics}
+              aria-label="View Bandwidth & Access Analytics"
+              title="Bandwidth & Access Analytics"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 text-xs font-semibold transition-all shadow-sm"
+            >
+              <Activity className="w-3.5 h-3.5 text-cyan-400" />
+              <span className="hidden lg:inline">Analytics</span>
+            </button>
+          )}
 
           {/* Connect Account CTA */}
           <button

@@ -30,6 +30,8 @@ import {
   batchPermanentDeleteItems,
   batchMoveItems,
   getFileCategory,
+  findBestAccountForUpload,
+  formatBytes,
 } from './utils/driveLogic';
 import { downloadSingleFile, downloadItemsAsZip } from './utils/fileDownloader';
 import { MicrosoftGraphService } from './services/microsoftGraph';
@@ -49,8 +51,12 @@ import { MoveModal } from './components/MoveModal';
 import { ShareModal } from './components/ShareModal';
 import { ActivityLogDrawer } from './components/ActivityLogDrawer';
 import { StorageStatsModal } from './components/StorageStatsModal';
+import { FtpSftpModal } from './components/FtpSftpModal';
+import { CloudMigrationModal } from './components/CloudMigrationModal';
+import { AnalyticsDashboard } from './components/AnalyticsDashboard';
 import { LoginScreen } from './components/LoginScreen';
 import { PublicDownloadView } from './components/PublicDownloadView';
+import { parseDetailedError, extractErrorMessage } from './utils/formatError';
 import {
   FolderOpen,
   Upload,
@@ -64,6 +70,12 @@ import {
   RefreshCw,
   ArrowRight,
   Database,
+  ChevronDown,
+  ChevronUp,
+  X,
+  Server,
+  Copy,
+  Check,
 } from 'lucide-react';
 
 export default function App() {
@@ -170,13 +182,31 @@ export default function App() {
   const [shareItem, setShareItem] = useState<DriveItem | null>(null);
   const [isActivityLogOpen, setIsActivityLogOpen] = useState(false);
   const [isStatsModalOpen, setIsStatsModalOpen] = useState(false);
+  const [isFtpSftpModalOpen, setIsFtpSftpModalOpen] = useState(false);
+  const [isMigrationModalOpen, setIsMigrationModalOpen] = useState(false);
+  const [loadBalancingEnabled, setLoadBalancingEnabled] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('multidrive_load_balancing_enabled');
+      return saved !== null ? saved === 'true' : true;
+    } catch {
+      return true;
+    }
+  });
 
   // Real-time synchronization
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<string>(new Date().toISOString());
 
-  // Toast notification
-  const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
+  // Enhanced Toast notification state (guarantees no [object Object])
+  const [toastMessage, setToastMessage] = useState<{
+    id: string;
+    text: string;
+    code?: string;
+    details?: string;
+    type: 'success' | 'error' | 'info';
+    expanded?: boolean;
+  } | null>(null);
+  const [toastCopied, setToastCopied] = useState(false);
 
   // Hidden file input
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -357,12 +387,39 @@ export default function App() {
     showToast('Loaded demo OneDrive showcase drives');
   };
 
-  // Toast helper
-  const showToast = (text: string, type: 'success' | 'error' | 'info' = 'success') => {
-    setToastMessage({ text, type });
+  // Enhanced Toast helper with automatic Microsoft Graph & OAuth error parsing
+  const showToast = (
+    msg: unknown,
+    type: 'success' | 'error' | 'info' = 'success',
+    overrideDetails?: string
+  ) => {
+    const id = `toast-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+
+    if (type === 'error') {
+      const parsed = parseDetailedError(msg);
+      setToastMessage({
+        id,
+        text: parsed.userFriendlyMessage,
+        code: parsed.code,
+        details: overrideDetails || parsed.technicalDetails,
+        type: 'error',
+        expanded: false,
+      });
+    } else {
+      const text = typeof msg === 'string' ? msg : extractErrorMessage(msg);
+      setToastMessage({
+        id,
+        text,
+        details: overrideDetails,
+        type,
+        expanded: false,
+      });
+    }
+
+    // Auto-dismiss after 4.5s unless expanded
     setTimeout(() => {
-      setToastMessage((prev) => (prev?.text === text ? null : prev));
-    }, 3500);
+      setToastMessage((prev) => (prev?.id === id && !prev.expanded ? null : prev));
+    }, 4500);
   };
 
   // Add activity log
@@ -460,6 +517,9 @@ export default function App() {
           }
         } catch (err) {
           console.error(`Live account sync error for ${liveAcc.name}:`, err);
+          if (isManual) {
+            showToast(err, 'error');
+          }
         }
       }
 
@@ -532,8 +592,8 @@ export default function App() {
       await downloadSingleFile(item);
       showToast(`Downloaded "${item.name}"`);
       logActivity('download', item.name, item.accountName, item.accountId);
-    } catch {
-      showToast(`Failed to download "${item.name}"`, 'error');
+    } catch (err) {
+      showToast(err, 'error');
     }
   };
 
@@ -553,8 +613,8 @@ export default function App() {
         'all'
       );
       handleClearSelection();
-    } catch {
-      showToast('Failed to create ZIP download', 'error');
+    } catch (err) {
+      showToast(err, 'error');
     }
   };
 
@@ -591,6 +651,7 @@ export default function App() {
         );
       } catch (err) {
         console.error('Failed to create folder on Microsoft Graph:', err);
+        showToast(err, 'error');
       }
     }
   };
@@ -615,8 +676,36 @@ export default function App() {
     // If live account, call Graph API
     const acc = accounts.find((a) => a.id === item.accountId);
     if (acc?.isLive && acc.accessToken) {
-      MicrosoftGraphService.renameItem(acc.accessToken, acc, item.id, newName).catch(console.error);
+      MicrosoftGraphService.renameItem(acc.accessToken, acc, item.id, newName).catch((err) => {
+        showToast(err, 'error');
+      });
     }
+  };
+
+  // Update item share security (PIN / Expiry)
+  const handleUpdateItemSecurity = async (itemId: string, sharePin?: string, expiresAt?: string) => {
+    setItems((prev) =>
+      prev.map((i) => (i.id === itemId ? { ...i, sharePin, expiresAt } : i))
+    );
+    showToast('Updated link password protection & expiration settings');
+  };
+
+  // Direct Cloud-to-Cloud Migration Completion Handler
+  const handleMigrateComplete = (migratedCount: number, totalBytes: number, targetAccountName: string) => {
+    showToast(
+      `Cloud Migration Complete: Transferred ${migratedCount} item(s) (${formatBytes(totalBytes)}) to ${targetAccountName}`,
+      'success'
+    );
+    logActivity('migrate', `${migratedCount} items`, targetAccountName, 'cloud-migration', `Transferred ${formatBytes(totalBytes)} via cloud conduit`);
+    handleClearSelection();
+    // Refresh items and account quotas from server store
+    fetch('/api/storage/data')
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data.items)) setItems(data.items);
+        if (Array.isArray(data.accounts)) setAccounts(data.accounts);
+      })
+      .catch(() => {});
   };
 
   // Move / transfer items
@@ -675,16 +764,33 @@ export default function App() {
     logActivity('restore', item.name, item.accountName, item.accountId);
   };
 
-  // File Upload Handler
+  // File Upload Handler with Automatic Multi-Account Load Balancing
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    const targetAccount = currentAccount || accounts[0];
+    let totalUploadedBytes = 0;
+    const assignedAccounts: string[] = [];
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       const category = getFileCategory(file.name, file.type);
+      totalUploadedBytes += file.size;
+
+      // Smart Multi-Account Load Balancing:
+      // If enabled, automatically route this file to the connected OneDrive tenant with the highest available free space
+      let targetAccount = currentAccount || accounts[0];
+      let balanceTag = '';
+
+      if (loadBalancingEnabled && accounts.length > 1) {
+        const best = findBestAccountForUpload(accounts, file.size);
+        if (best) {
+          targetAccount = best.account;
+          balanceTag = ` (⚡ Routed by Load Balancer: ${best.formattedFree} free)`;
+        }
+      }
+
+      assignedAccounts.push(targetAccount.name);
 
       // Read preview data based on file type
       let sampleContent: string | undefined = undefined;
@@ -753,7 +859,7 @@ export default function App() {
         )
       );
 
-      logActivity('upload', file.name, targetAccount.name, targetAccount.id);
+      logActivity('upload', file.name, targetAccount.name, targetAccount.id, `${formatBytes(file.size)}${balanceTag}`);
 
       // Live account graph upload
       if (targetAccount.isLive && targetAccount.accessToken) {
@@ -762,11 +868,20 @@ export default function App() {
           targetAccount,
           currentFolderId,
           file
-        ).catch(console.error);
+        ).catch((err) => {
+          console.error('Failed to upload file to Microsoft Graph:', err);
+          showToast(err, 'error');
+        });
       }
     }
 
-    showToast(`Uploaded ${files.length} file(s) to ${targetAccount.name}`);
+    const uniqueAssigned = Array.from(new Set(assignedAccounts));
+    const targetLabel = uniqueAssigned.length === 1 ? uniqueAssigned[0] : `${uniqueAssigned.length} balanced drives`;
+    showToast(
+      `Uploaded ${files.length} file(s) (${formatBytes(totalUploadedBytes)}) to ${targetLabel}${
+        loadBalancingEnabled && accounts.length > 1 ? ' [⚡ Auto-Balanced]' : ''
+      }`
+    );
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -874,6 +989,12 @@ export default function App() {
         onOpenConnectModal={() => setIsConnectModalOpen(true)}
         onOpenActivityLog={() => setIsActivityLogOpen(true)}
         onOpenStatsModal={() => setIsStatsModalOpen(true)}
+        onOpenFtpSftpModal={() => setIsFtpSftpModalOpen(true)}
+        onOpenAnalytics={() => {
+          setNavFilter('analytics');
+          setCurrentFolderId(null);
+          handleClearSelection();
+        }}
         onLogout={handleLogout}
         aggregateStorage={aggregateStorage}
       />
@@ -916,42 +1037,76 @@ export default function App() {
           }}
           onOpenConnectModal={() => setIsConnectModalOpen(true)}
           onOpenStatsModal={() => setIsStatsModalOpen(true)}
+          onOpenFtpSftpModal={() => setIsFtpSftpModalOpen(true)}
           aggregateStorage={aggregateStorage}
         />
 
         {/* Center Content Workspace */}
         <main className="flex-1 flex flex-col min-w-0 bg-slate-950 overflow-y-auto">
-          {/* Action Bar (Breadcrumbs, Upload, Sort, Batch) */}
-          <ActionBar
-            breadcrumbs={breadcrumbs}
-            onNavigateBreadcrumb={(id) => {
-              setCurrentFolderId(id);
-              handleClearSelection();
-            }}
-            viewMode={viewMode}
-            onViewModeChange={setViewMode}
-            sortField={sortField}
-            onSortFieldChange={setSortField}
-            sortOrder={sortOrder}
-            onSortOrderChange={setSortOrder}
-            selectedCount={selectedIds.size}
-            onUploadClick={() => fileInputRef.current?.click()}
-            onNewFolderClick={() => setIsNewFolderOpen(true)}
-            onBatchDownloadZip={handleBatchDownloadZip}
-            onBatchMoveClick={() => {
-              const moving = items.filter((i) => selectedIds.has(i.id));
-              setItemsToMove(moving);
-            }}
-            onBatchDeleteClick={handleBatchDelete}
-            onClearSelection={handleClearSelection}
-            onSelectAll={handleSelectAll}
-            isAllSelected={selectedIds.size > 0 && selectedIds.size === visibleItems.length}
-            totalVisibleCount={visibleItems.length}
-            currentAccount={currentAccount}
-          />
+          {navFilter === 'analytics' ? (
+            /* Bandwidth & Access Analytics View */
+            <AnalyticsDashboard
+              onOpenFile={(fileId) => {
+                const target = items.find((i) => i.id === fileId);
+                if (target) setPreviewItem(target);
+              }}
+            />
+          ) : (
+            <>
+              {/* Action Bar (Breadcrumbs, Upload, Sort, Batch) */}
+              <ActionBar
+                breadcrumbs={breadcrumbs}
+                onNavigateBreadcrumb={(id) => {
+                  setCurrentFolderId(id);
+                  handleClearSelection();
+                }}
+                viewMode={viewMode}
+                onViewModeChange={setViewMode}
+                sortField={sortField}
+                onSortFieldChange={setSortField}
+                sortOrder={sortOrder}
+                onSortOrderChange={setSortOrder}
+                selectedCount={selectedIds.size}
+                onUploadClick={() => fileInputRef.current?.click()}
+                onNewFolderClick={() => setIsNewFolderOpen(true)}
+                onBatchDownloadZip={handleBatchDownloadZip}
+                onBatchMoveClick={() => {
+                  const moving = items.filter((i) => selectedIds.has(i.id));
+                  setItemsToMove(moving);
+                }}
+                onBatchMigrateClick={() => {
+                  if (selectedIds.size === 0) {
+                    showToast('Select one or more items to migrate across OneDrive drives', 'info');
+                    return;
+                  }
+                  setIsMigrationModalOpen(true);
+                }}
+                onBatchDeleteClick={handleBatchDelete}
+                onClearSelection={handleClearSelection}
+                onSelectAll={handleSelectAll}
+                isAllSelected={selectedIds.size > 0 && selectedIds.size === visibleItems.length}
+                totalVisibleCount={visibleItems.length}
+                currentAccount={currentAccount}
+                loadBalancingEnabled={loadBalancingEnabled}
+                onToggleLoadBalancing={() => {
+                  setLoadBalancingEnabled((prev) => {
+                    const next = !prev;
+                    try {
+                      localStorage.setItem('multidrive_load_balancing_enabled', String(next));
+                    } catch {}
+                    showToast(
+                      next
+                        ? 'Auto Load Balancing ACTIVE: Large uploads automatically route to whichever OneDrive has the highest free storage.'
+                        : 'Auto Load Balancing OFF: Uploads route directly to active selected drive.',
+                      'info'
+                    );
+                    return next;
+                  });
+                }}
+              />
 
-          {/* Items Explorer Body */}
-          <div className="flex-1 p-2 sm:p-4">
+              {/* Items Explorer Body */}
+              <div className="flex-1 p-2 sm:p-4">
             {accounts.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 px-4 text-center max-w-xl mx-auto">
                 <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-sky-600 via-blue-600 to-indigo-600 flex items-center justify-center text-white mb-4 shadow-xl shadow-sky-500/20">
@@ -1082,6 +1237,8 @@ export default function App() {
               />
             )}
           </div>
+            </>
+          )}
         </main>
       </div>
 
@@ -1129,7 +1286,18 @@ export default function App() {
       <ShareModal
         item={shareItem}
         onClose={() => setShareItem(null)}
+        onUpdateItemSecurity={handleUpdateItemSecurity}
       />
+
+      {isMigrationModalOpen && (
+        <CloudMigrationModal
+          items={items.filter((i) => selectedIds.has(i.id))}
+          accounts={accounts}
+          currentAccountId={selectedAccountId}
+          onClose={() => setIsMigrationModalOpen(false)}
+          onMigrateComplete={handleMigrateComplete}
+        />
+      )}
 
       <ActivityLogDrawer
         isOpen={isActivityLogOpen}
@@ -1146,15 +1314,103 @@ export default function App() {
         aggregateStorage={aggregateStorage}
       />
 
-      {/* Toast Notification Banner */}
+      <FtpSftpModal
+        isOpen={isFtpSftpModalOpen}
+        onClose={() => setIsFtpSftpModalOpen(false)}
+        accounts={accounts}
+        items={items}
+      />
+
+      {/* Enhanced Diagnostic Toast Notification Banner */}
       {toastMessage && (
-        <div className="fixed bottom-5 right-5 z-50 flex items-center gap-2.5 px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-750 text-xs text-slate-100 shadow-2xl animate-bounce">
-          {toastMessage.type === 'error' ? (
-            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-          ) : (
-            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-          )}
-          <span>{toastMessage.text}</span>
+        <div className="fixed bottom-5 right-5 z-50 max-w-md w-full px-4 animate-fadeIn select-text pointer-events-auto">
+          <div
+            className={`p-3.5 rounded-2xl shadow-2xl border flex flex-col gap-2 backdrop-blur-md transition-all ${
+              toastMessage.type === 'error'
+                ? 'bg-slate-900/95 border-rose-800/80 text-rose-200 shadow-rose-950/60'
+                : toastMessage.type === 'info'
+                ? 'bg-slate-900/95 border-sky-800/80 text-sky-200 shadow-sky-950/60'
+                : 'bg-slate-900/95 border-emerald-800/80 text-emerald-200 shadow-emerald-950/60'
+            }`}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-2.5 flex-1 min-w-0">
+                {toastMessage.type === 'error' ? (
+                  <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+                ) : toastMessage.type === 'info' ? (
+                  <Cloud className="w-5 h-5 text-sky-400 shrink-0 mt-0.5" />
+                ) : (
+                  <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-xs tracking-tight text-slate-100">
+                      {toastMessage.type === 'error'
+                        ? 'Operation Error'
+                        : toastMessage.type === 'info'
+                        ? 'System Information'
+                        : 'Success'}
+                    </span>
+                    {toastMessage.code && (
+                      <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-rose-950/80 border border-rose-800/80 text-rose-300 font-semibold">
+                        {toastMessage.code}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs mt-0.5 text-slate-200 leading-relaxed break-words font-medium">
+                    {toastMessage.text}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setToastMessage(null)}
+                aria-label="Close notification"
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {toastMessage.details && (
+              <div className="border-t border-slate-800/80 pt-2 space-y-1.5 text-left">
+                <div className="flex items-center justify-between">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setToastMessage((prev) => (prev ? { ...prev, expanded: !prev.expanded } : null))
+                    }
+                    className="text-[11px] text-slate-400 hover:text-slate-200 flex items-center gap-1 font-medium transition-colors"
+                  >
+                    <span>{toastMessage.expanded ? 'Hide Technical Details' : 'View Microsoft Graph Details'}</span>
+                    {toastMessage.expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                  </button>
+
+                  {toastMessage.expanded && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(toastMessage.details || '');
+                        setToastCopied(true);
+                        setTimeout(() => setToastCopied(false), 2000);
+                      }}
+                      className="text-[10px] text-sky-400 hover:text-sky-300 flex items-center gap-1"
+                    >
+                      {toastCopied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                      <span>{toastCopied ? 'Copied' : 'Copy'}</span>
+                    </button>
+                  )}
+                </div>
+
+                {toastMessage.expanded && (
+                  <pre className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-[10px] font-mono text-slate-300 overflow-x-auto max-h-36 select-all">
+                    {toastMessage.details}
+                  </pre>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

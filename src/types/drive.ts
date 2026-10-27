@@ -58,13 +58,17 @@ export interface DriveItem {
   deleted?: boolean;
   content?: string; // sample or raw text content for previewing
   shareLink?: string;
+  sharePin?: string; // Optional security PIN for downloading/previewing
+  expiresAt?: string; // ISO string for link expiration
+  downloadCount?: number;
+  lastDownloadedAt?: string;
   tags?: string[];
   eTag?: string;
 }
 
 export type ViewMode = 'grid' | 'list';
 
-export type NavigationFilter = 'all' | 'recent' | 'starred' | 'shared' | 'trash';
+export type NavigationFilter = 'all' | 'recent' | 'starred' | 'shared' | 'trash' | 'analytics';
 
 export type SortField = 'name' | 'size' | 'date' | 'account';
 export type SortOrder = 'asc' | 'desc';
@@ -86,7 +90,7 @@ export interface AdvancedFilterOptions {
 export interface ActivityLogEntry {
   id: string;
   timestamp: string;
-  action: 'create_folder' | 'upload' | 'download' | 'delete' | 'restore' | 'rename' | 'move' | 'sync' | 'share';
+  action: 'create_folder' | 'upload' | 'download' | 'delete' | 'restore' | 'rename' | 'move' | 'sync' | 'share' | 'migrate';
   itemName: string;
   accountId: string;
   accountName: string;
@@ -103,5 +107,50 @@ export interface AuthState {
   isAuthenticated: boolean;
   token: string | null;
   adminEmail?: string;
+}
+
+export interface DailyBandwidthStat {
+  date: string;
+  bytes: number;
+  downloads: number;
+}
+
+export interface TopFileStat {
+  id: string;
+  name: string;
+  fileType: FileCategory;
+  downloads: number;
+  bytes: number;
+  accountName: string;
+}
+
+export interface VisitorLog {
+  id: string;
+  fileId: string;
+  fileName: string;
+  ip: string;
+  country: string;
+  countryCode: string;
+  city: string;
+  userAgent: string;
+  timestamp: string;
+  bytes: number;
+}
+
+export interface AnalyticsSummary {
+  totalDownloads: number;
+  totalBytesServed: number;
+  uniqueVisitors: number;
+  topCountry: string;
+  dailyBandwidth: DailyBandwidthStat[];
+  topFiles: TopFileStat[];
+  recentLogs: VisitorLog[];
+}
+
+export interface CloudMigrationRequest {
+  itemIds: string[];
+  sourceAccountId: string;
+  targetAccountId: string;
+  mode: 'copy' | 'move';
 }
 

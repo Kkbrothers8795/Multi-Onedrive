@@ -446,3 +446,79 @@ export function calculateStorageByCategory(items: DriveItem[]): {
     .sort((a, b) => b.bytes - a.bytes);
 }
 
+/**
+ * Automatically determines the optimal OneDrive account for file uploads
+ * based on highest remaining storage capacity and availability.
+ */
+export function findBestAccountForUpload(
+  accounts: DriveAccount[],
+  fileSize: number = 0
+): { account: DriveAccount; freeBytes: number; formattedFree: string; reason: string } | null {
+  if (!accounts || accounts.length === 0) return null;
+
+  // Calculate remaining bytes for each account
+  const evaluated = accounts.map((acc) => {
+    const total = acc.quota?.total || 1099511627776; // default 1 TB
+    const used = acc.quota?.used || 0;
+    const free = Math.max(0, total - used);
+    return { account: acc, freeBytes: free };
+  });
+
+  // Sort by highest free bytes first
+  evaluated.sort((a, b) => b.freeBytes - a.freeBytes);
+
+  // Find first account with enough free space for the file
+  const candidate = evaluated.find((e) => e.freeBytes >= fileSize) || evaluated[0];
+  if (!candidate) return null;
+
+  return {
+    account: candidate.account,
+    freeBytes: candidate.freeBytes,
+    formattedFree: formatBytes(candidate.freeBytes),
+    reason: `Highest available capacity (${formatBytes(candidate.freeBytes)} free of ${formatBytes(candidate.account.quota?.total || 1099511627776)})`,
+  };
+}
+
+/**
+ * Performs direct cloud-to-cloud migration of files across connected accounts
+ */
+export function migrateItemsAcrossAccounts(
+  items: DriveItem[],
+  itemIds: string[],
+  targetAccount: DriveAccount,
+  mode: 'copy' | 'move'
+): { updatedItems: DriveItem[]; migratedCount: number; totalBytes: number } {
+  const idSet = new Set(itemIds);
+  const targetItems = items.filter((i) => idSet.has(i.id));
+  const totalBytes = targetItems.reduce((acc, i) => acc + (i.size || 0), 0);
+
+  if (mode === 'move') {
+    const updated = items.map((item) => {
+      if (idSet.has(item.id)) {
+        return {
+          ...item,
+          accountId: targetAccount.id,
+          accountName: targetAccount.name,
+          accountColor: targetAccount.color,
+          lastModifiedDateTime: new Date().toISOString(),
+        };
+      }
+      return item;
+    });
+    return { updatedItems: updated, migratedCount: targetItems.length, totalBytes };
+  } else {
+    // Copy mode: clone items with new IDs on target account
+    const cloned: DriveItem[] = targetItems.map((orig) => ({
+      ...orig,
+      id: `copy-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      name: `Copy of ${orig.name}`,
+      accountId: targetAccount.id,
+      accountName: targetAccount.name,
+      accountColor: targetAccount.color,
+      createdDateTime: new Date().toISOString(),
+      lastModifiedDateTime: new Date().toISOString(),
+    }));
+    return { updatedItems: [...cloned, ...items], migratedCount: cloned.length, totalBytes };
+  }
+}
+
