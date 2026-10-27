@@ -54,6 +54,7 @@ import { StorageStatsModal } from './components/StorageStatsModal';
 import { FtpSftpModal } from './components/FtpSftpModal';
 import { CloudMigrationModal } from './components/CloudMigrationModal';
 import { AnalyticsDashboard } from './components/AnalyticsDashboard';
+import { BackupModal } from './components/BackupModal';
 import { LoginScreen } from './components/LoginScreen';
 import { PublicDownloadView } from './components/PublicDownloadView';
 import { parseDetailedError, extractErrorMessage } from './utils/formatError';
@@ -184,6 +185,7 @@ export default function App() {
   const [isStatsModalOpen, setIsStatsModalOpen] = useState(false);
   const [isFtpSftpModalOpen, setIsFtpSftpModalOpen] = useState(false);
   const [isMigrationModalOpen, setIsMigrationModalOpen] = useState(false);
+  const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
   const [loadBalancingEnabled, setLoadBalancingEnabled] = useState<boolean>(() => {
     try {
       const saved = localStorage.getItem('multidrive_load_balancing_enabled');
@@ -925,6 +927,31 @@ export default function App() {
     setSelectedAccountId('all');
   };
 
+  // Handler when a backup is restored
+  const handleRestoreComplete = async () => {
+    try {
+      const res = await fetch('/api/storage/data');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.accounts)) {
+          setAccounts(data.accounts);
+          localStorage.setItem('onedrive_multidrive_accounts', JSON.stringify(data.accounts));
+        }
+        if (Array.isArray(data.items)) {
+          setItems(data.items);
+          localStorage.setItem('onedrive_multidrive_items', JSON.stringify(data.items));
+        }
+        if (typeof data.isDemoDismissed === 'boolean') {
+          setIsDemoDismissed(data.isDemoDismissed);
+          localStorage.setItem('onedrive_multidrive_demo_dismissed', String(data.isDemoDismissed));
+        }
+        showToast('System configuration & storage state restored successfully', 'success');
+      }
+    } catch (e) {
+      showToast('Restoration completed, please refresh the page to reload state', 'info');
+    }
+  };
+
   // 1. Render Public Unauthenticated Download Link View
   if (publicFileId) {
     return (
@@ -995,6 +1022,7 @@ export default function App() {
           setCurrentFolderId(null);
           handleClearSelection();
         }}
+        onOpenBackupModal={() => setIsBackupModalOpen(true)}
         onLogout={handleLogout}
         aggregateStorage={aggregateStorage}
       />
@@ -1038,6 +1066,7 @@ export default function App() {
           onOpenConnectModal={() => setIsConnectModalOpen(true)}
           onOpenStatsModal={() => setIsStatsModalOpen(true)}
           onOpenFtpSftpModal={() => setIsFtpSftpModalOpen(true)}
+          onOpenBackupModal={() => setIsBackupModalOpen(true)}
           aggregateStorage={aggregateStorage}
         />
 
@@ -1319,6 +1348,14 @@ export default function App() {
         onClose={() => setIsFtpSftpModalOpen(false)}
         accounts={accounts}
         items={items}
+      />
+
+      <BackupModal
+        isOpen={isBackupModalOpen}
+        onClose={() => setIsBackupModalOpen(false)}
+        accounts={accounts}
+        items={items}
+        onRestoreComplete={handleRestoreComplete}
       />
 
       {/* Enhanced Diagnostic Toast Notification Banner */}

@@ -119,6 +119,16 @@ MultiDrive is pre-configured for full out-of-the-box compatibility with Vercel s
 - **Visitor Geolocation**: Origin countries and city breakdown with country flags.
 - **Live Event Stream**: Real-time log of download requests with IP, timestamp, device user-agent, and status codes.
 
+### 5. Backup & Restore (Full `server-store.json` Import & Export)
+- Click **"Backup"** in the top navbar or sidebar to open the **Backup & Migration Gateway**.
+- **One-Click Export**: Download a timestamped snapshot of your active configuration and file repository (`multidrive-server-store-backup-YYYY-MM-DD.json` or direct `/api/backup/export`).
+- **Flexible Import**:
+  - Drag-and-drop or upload any `server-store.json` from previous installations, local servers, or Vercel instances.
+  - **Clean Replace Mode**: Completely resets and overwrites state to mirror the backup snapshot.
+  - **Merge & Append Mode**: Intelligently combines accounts and items from the backup with current data, deduplicating IDs.
+  - **Admin Password Restoration**: Checkbox option to restore or preserve the administrator password.
+  - Automatic validation preview before applying any changes.
+
 ### Deploying to a VPS / Cloud VM (Ubuntu / Debian / Docker)
 
 1. **Install Node.js 20+** and PM2:

@@ -508,6 +508,83 @@ app.get("/api/storage/data", (req, res) => {
     isDemoDismissed: serverStore.isDemoDismissed
   });
 });
+app.get("/api/backup/export", (req, res) => {
+  loadStore();
+  const timestamp = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
+  const filename = `multidrive-server-store-backup-${timestamp}.json`;
+  const payload = {
+    _format: "multidrive-backup-v1",
+    exportedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    accounts: serverStore.accounts,
+    items: serverStore.items,
+    adminPassword: serverStore.adminPassword,
+    isDemoDismissed: serverStore.isDemoDismissed,
+    analytics: serverStore.analytics,
+    meta: {
+      accountCount: serverStore.accounts.length,
+      itemCount: serverStore.items.length,
+      totalStorageBytes: serverStore.accounts.reduce((sum, a) => sum + (a.quota?.used || 0), 0)
+    }
+  };
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.send(JSON.stringify(payload, null, 2));
+});
+app.post("/api/backup/import", (req, res) => {
+  loadStore();
+  const { data, mode = "replace", restorePassword = false } = req.body;
+  if (!data || typeof data !== "object") {
+    return res.status(400).json({ error: "Invalid backup file format. Expected a valid JSON object." });
+  }
+  const importedAccounts = Array.isArray(data.accounts) ? data.accounts : [];
+  const importedItems = Array.isArray(data.items) ? data.items : [];
+  const importedPassword = typeof data.adminPassword === "string" && data.adminPassword ? data.adminPassword : null;
+  const importedAnalytics = data.analytics && typeof data.analytics === "object" ? data.analytics : null;
+  if (importedAccounts.length === 0 && importedItems.length === 0) {
+    return res.status(400).json({
+      error: "Backup file contains no accounts or items. Please upload a valid server-store.json file."
+    });
+  }
+  if (mode === "replace") {
+    serverStore.accounts = importedAccounts;
+    serverStore.items = importedItems;
+    if (restorePassword && importedPassword) {
+      serverStore.adminPassword = importedPassword;
+    }
+    serverStore.isDemoDismissed = true;
+    if (importedAnalytics) {
+      serverStore.analytics = importedAnalytics;
+    }
+  } else {
+    const existingAccountIds = new Set(serverStore.accounts.map((a) => a.id));
+    const mergedAccounts = [...serverStore.accounts];
+    for (const acc of importedAccounts) {
+      if (!existingAccountIds.has(acc.id)) {
+        mergedAccounts.push(acc);
+        existingAccountIds.add(acc.id);
+      }
+    }
+    serverStore.accounts = mergedAccounts;
+    const existingItemIds = new Set(serverStore.items.map((i) => i.id));
+    const mergedItems = [...serverStore.items];
+    for (const it of importedItems) {
+      if (!existingItemIds.has(it.id)) {
+        mergedItems.push(it);
+        existingItemIds.add(it.id);
+      }
+    }
+    serverStore.items = mergedItems;
+    serverStore.isDemoDismissed = true;
+  }
+  saveStore();
+  res.json({
+    success: true,
+    mode,
+    accountsCount: serverStore.accounts.length,
+    itemsCount: serverStore.items.length,
+    message: `Successfully imported backup with ${importedAccounts.length} account(s) and ${importedItems.length} item(s).`
+  });
+});
 app.post("/api/storage/accounts", (req, res) => {
   const { accounts, isDemoDismissed } = req.body;
   if (Array.isArray(accounts)) {

@@ -14,6 +14,7 @@ import {
   ChevronRight,
   Server,
   Activity,
+  Database,
 } from 'lucide-react';
 import { DriveAccount, NavigationFilter } from '../types/drive';
 import { formatBytes } from '../utils/driveLogic';
@@ -28,6 +29,7 @@ interface SidebarProps {
   onOpenConnectModal: () => void;
   onOpenStatsModal: () => void;
   onOpenFtpSftpModal?: () => void;
+  onOpenBackupModal?: () => void;
   aggregateStorage: { total: number; used: number; remaining: number; percent: number };
 }
 
@@ -40,6 +42,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenConnectModal,
   onOpenStatsModal,
   onOpenFtpSftpModal,
+  onOpenBackupModal,
   aggregateStorage,
 }) => {
   return (
@@ -153,6 +156,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
             <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-950/60 border border-amber-800/60 text-amber-300">
               VFS
+            </span>
+          </button>
+        )}
+
+        {onOpenBackupModal && (
+          <button
+            type="button"
+            onClick={onOpenBackupModal}
+            className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium text-cyan-300 hover:bg-cyan-500/10 hover:text-cyan-200 transition-all border border-cyan-500/20 bg-cyan-500/5 mt-1"
+          >
+            <div className="flex items-center gap-2.5">
+              <Database className="w-4 h-4 text-cyan-400" />
+              <span>Backup &amp; Restore</span>
+            </div>
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-cyan-950/60 border border-cyan-800/60 text-cyan-300">
+              JSON
             </span>
           </button>
         )}

@@ -13,6 +13,7 @@ import {
   LogOut,
   Server,
   Activity,
+  Database,
 } from 'lucide-react';
 import { DriveAccount } from '../types/drive';
 import { formatBytes } from '../utils/driveLogic';
@@ -33,6 +34,7 @@ interface NavbarProps {
   onOpenStatsModal?: () => void;
   onOpenFtpSftpModal?: () => void;
   onOpenAnalytics?: () => void;
+  onOpenBackupModal?: () => void;
   onLogout?: () => void;
   aggregateStorage: { total: number; used: number; remaining: number; percent: number };
 }
@@ -53,6 +55,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenStatsModal,
   onOpenFtpSftpModal,
   onOpenAnalytics,
+  onOpenBackupModal,
   onLogout,
   aggregateStorage,
 }) => {
@@ -206,6 +209,20 @@ export const Navbar: React.FC<NavbarProps> = ({
             >
               <Activity className="w-3.5 h-3.5 text-cyan-400" />
               <span className="hidden lg:inline">Analytics</span>
+            </button>
+          )}
+
+          {/* Backup & Restore Store Trigger */}
+          {onOpenBackupModal && (
+            <button
+              type="button"
+              onClick={onOpenBackupModal}
+              aria-label="Backup or Restore Installation"
+              title="Backup & Restore (server-store.json)"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 text-xs font-semibold transition-all shadow-sm"
+            >
+              <Database className="w-3.5 h-3.5 text-indigo-400" />
+              <span className="hidden xl:inline">Backup</span>
             </button>
           )}
 
