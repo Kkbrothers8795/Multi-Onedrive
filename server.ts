@@ -15,8 +15,27 @@ app.set('trust proxy', 1);
 const isProd = process.env.NODE_ENV === 'production';
 const port = process.env.PORT ? parseInt(process.env.PORT, 10) : (isProd ? 8080 : 3000);
 
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.json({ limit: '200mb' }));
+app.use(express.urlencoded({ extended: true, limit: '200mb' }));
+
+// VPS-Safe Fallback Routes for Vercel Analytics & Speed Insights
+// Ensures zero 404s or script errors when deployed on a self-hosted Linux VPS, Docker, or PM2
+app.get('/_vercel/insights/script.js', (_req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.status(200).send('/* MultiDrive VPS-Safe Vercel Analytics No-Op */');
+});
+app.post('/_vercel/insights/*', (_req: Request, res: Response) => {
+  res.status(200).json({ ok: true });
+});
+app.get('/_vercel/speed-insights/script.js', (_req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.status(200).send('/* MultiDrive VPS-Safe Vercel Speed Insights No-Op */');
+});
+app.post('/_vercel/speed-insights/*', (_req: Request, res: Response) => {
+  res.status(200).json({ ok: true });
+});
 
 // Helper to determine the public app URL
 function getAppUrl(req: Request): string {
@@ -26,6 +45,60 @@ function getAppUrl(req: Request): string {
   const host = req.get('host') || `localhost:${port}`;
   const protocol = req.protocol || 'http';
   return `${protocol}://${host}`;
+}
+
+// Extract Azure AD appid (client_id), tid (tenant_id), and exp from a JWT accessToken
+function extractServerJwtClaims(token?: string): {
+  appId?: string;
+  tenantId?: string;
+  expMs?: number;
+} {
+  if (!token || typeof token !== 'string') return {};
+  const parts = token.split('.');
+  if (parts.length !== 3) return {};
+  try {
+    const payloadJson = Buffer.from(parts[1], 'base64url').toString('utf-8');
+    const payload = JSON.parse(payloadJson);
+    return {
+      appId: payload.appid || payload.azp || undefined,
+      tenantId: payload.tid || undefined,
+      expMs: typeof payload.exp === 'number' ? payload.exp * 1000 : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function sanitizeServerFileName(rawName: string): string {
+  const cleaned = (rawName || 'uploaded-file')
+    .replace(/["*:<>?/\\|]/g, '_')
+    .trim()
+    .replace(/^\.+|\.+$/g, '');
+  return cleaned || `file-${Date.now()}`;
+}
+
+function normalizeServerAccount(acc: any): any {
+  if (!acc || typeof acc !== 'object') return acc;
+  const accessToken = acc.accessToken || acc.access_token || undefined;
+  const refreshToken = acc.refreshToken || acc.refresh_token || undefined;
+  const claims = extractServerJwtClaims(accessToken);
+  const clientId = acc.clientId || acc.client_id || claims.appId || undefined;
+  const clientSecret = acc.clientSecret || acc.client_secret || undefined;
+  const tenantId = acc.tenantId || acc.tenant_id || claims.tenantId || 'common';
+  const hasRealTokens = Boolean(accessToken || refreshToken);
+
+  return {
+    ...acc,
+    isLive: Boolean(acc.isLive || hasRealTokens),
+    accessToken,
+    refreshToken,
+    clientId,
+    clientSecret,
+    tenantId,
+    expiresAt: acc.expiresAt || claims.expMs || undefined,
+    needsReauth: false,
+    syncStatus: 'synced',
+  };
 }
 
 // ==========================================
@@ -60,6 +133,25 @@ interface ServerStore {
     clientSecret?: string;
     tenantId?: string;
   };
+  fileRequests?: any[];
+  webhooks?: {
+    enabled: boolean;
+    telegramEnabled: boolean;
+    telegramBotToken: string;
+    telegramChatId: string;
+    discordEnabled: boolean;
+    discordWebhookUrl: string;
+    customWebhookEnabled: boolean;
+    customWebhookUrl: string;
+    events: {
+      onUpload: boolean;
+      onDownload: boolean;
+      onLowStorage: boolean;
+      onFileRequestUpload: boolean;
+      onDeduplicate: boolean;
+    };
+  };
+  webhookLogs?: any[];
 }
 
 const STORE_FILE = process.env.VERCEL
@@ -78,6 +170,25 @@ let serverStore: ServerStore = {
     dailyBandwidth: {},
     visitorLogs: [],
   },
+  fileRequests: [],
+  webhooks: {
+    enabled: false,
+    telegramEnabled: false,
+    telegramBotToken: '',
+    telegramChatId: '',
+    discordEnabled: false,
+    discordWebhookUrl: '',
+    customWebhookEnabled: false,
+    customWebhookUrl: '',
+    events: {
+      onUpload: true,
+      onDownload: true,
+      onLowStorage: true,
+      onFileRequestUpload: true,
+      onDeduplicate: true,
+    },
+  },
+  webhookLogs: [],
 };
 
 // Seed realistic 7-day initial analytics if uninitialized
@@ -121,8 +232,11 @@ function loadStore() {
     if (fs.existsSync(target)) {
       const raw = fs.readFileSync(target, 'utf-8');
       const parsed = JSON.parse(raw);
+      const normalizedAccounts = Array.isArray(parsed.accounts)
+        ? parsed.accounts.map(normalizeServerAccount)
+        : [];
       serverStore = {
-        accounts: Array.isArray(parsed.accounts) ? parsed.accounts : [],
+        accounts: normalizedAccounts,
         items: Array.isArray(parsed.items) ? parsed.items : [],
         adminPassword: parsed.adminPassword || process.env.ADMIN_PASSWORD || 'admin123',
         isDemoDismissed: !!parsed.isDemoDismissed,
@@ -133,11 +247,144 @@ function loadStore() {
           visitorLogs: [],
         },
         oauthConfig: parsed.oauthConfig || {},
+        fileRequests: Array.isArray(parsed.fileRequests) ? parsed.fileRequests : [],
+        webhooks: parsed.webhooks || {
+          enabled: false,
+          telegramEnabled: false,
+          telegramBotToken: '',
+          telegramChatId: '',
+          discordEnabled: false,
+          discordWebhookUrl: '',
+          customWebhookEnabled: false,
+          customWebhookUrl: '',
+          events: {
+            onUpload: true,
+            onDownload: true,
+            onLowStorage: true,
+            onFileRequestUpload: true,
+            onDeduplicate: true,
+          },
+        },
+        webhookLogs: Array.isArray(parsed.webhookLogs) ? parsed.webhookLogs : [],
       };
     }
   } catch (err) {
     console.warn('Could not read server-store.json, using in-memory store:', err);
   }
+}
+
+// Real-Time Webhook Dispatcher (Telegram, Discord, Custom HTTP Webhook)
+async function dispatchWebhookAlert(
+  eventType: 'onUpload' | 'onDownload' | 'onLowStorage' | 'onFileRequestUpload' | 'onDeduplicate' | 'test',
+  title: string,
+  details: string,
+  extraPayload: Record<string, any> = {}
+) {
+  const wh = serverStore.webhooks;
+  if (!wh) return;
+  if (eventType !== 'test') {
+    if (!wh.enabled) return;
+    if (wh.events && wh.events[eventType] === false) return;
+  }
+
+  const timestamp = new Date().toISOString();
+  const formattedText = `☁️ *MultiDrive OneDrive Enterprise*\n*${title}*\n${details}\n🕒 \`${timestamp}\``;
+
+  const appendLog = (
+    channel: 'telegram' | 'discord' | 'webhook',
+    success: boolean,
+    error?: string
+  ) => {
+    const entry = {
+      id: `whlog-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      timestamp,
+      channel,
+      event: title,
+      message: details,
+      success,
+      error,
+    };
+    serverStore.webhookLogs = [entry, ...(serverStore.webhookLogs || []).slice(0, 49)];
+  };
+
+  // 1. Telegram Bot API
+  if (wh.telegramEnabled && wh.telegramBotToken?.trim() && wh.telegramChatId?.trim()) {
+    try {
+      const tgUrl = `https://api.telegram.org/bot${wh.telegramBotToken.trim()}/sendMessage`;
+      const tgRes = await fetch(tgUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: wh.telegramChatId.trim(),
+          text: formattedText,
+          parse_mode: 'Markdown',
+        }),
+      });
+      if (tgRes.ok) {
+        appendLog('telegram', true);
+      } else {
+        const errData = await tgRes.json().catch(() => null);
+        appendLog('telegram', false, errData?.description || `HTTP ${tgRes.status}`);
+      }
+    } catch (err: any) {
+      appendLog('telegram', false, err.message);
+    }
+  }
+
+  // 2. Discord Webhook
+  if (wh.discordEnabled && wh.discordWebhookUrl?.trim()) {
+    try {
+      const dcRes = await fetch(wh.discordWebhookUrl.trim(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: 'MultiDrive Cloud Monitor',
+          embeds: [
+            {
+              title: `☁️ ${title}`,
+              description: details,
+              color: 0x0284c7,
+              timestamp,
+              footer: { text: 'MultiDrive Unified OneDrive Platform' },
+            },
+          ],
+        }),
+      });
+      if (dcRes.ok) {
+        appendLog('discord', true);
+      } else {
+        appendLog('discord', false, `HTTP ${dcRes.status}`);
+      }
+    } catch (err: any) {
+      appendLog('discord', false, err.message);
+    }
+  }
+
+  // 3. Custom JSON HTTP Webhook
+  if (wh.customWebhookEnabled && wh.customWebhookUrl?.trim()) {
+    try {
+      const cwRes = await fetch(wh.customWebhookUrl.trim(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event: eventType,
+          title,
+          details,
+          timestamp,
+          ...extraPayload,
+        }),
+      });
+      if (cwRes.ok) {
+        appendLog('webhook', true);
+      } else {
+        appendLog('webhook', false, `HTTP ${cwRes.status}`);
+      }
+    } catch (err: any) {
+      appendLog('webhook', false, err.message);
+    }
+  }
+
+  saveStore();
 }
 
 function recordDownloadAnalytics(item: any, req: Request) {
@@ -193,6 +440,13 @@ function recordDownloadAnalytics(item: any, req: Request) {
     ...(serverStore.analytics.visitorLogs || []).slice(0, 99),
   ];
   saveStore();
+
+  dispatchWebhookAlert(
+    'onDownload',
+    'Shared File Downloaded',
+    `File: ${item.name} (${(bytes / (1024 * 1024)).toFixed(2)} MB)\nVisitor: ${loc.city}, ${loc.country} (${displayIp})\nAccount: ${item.accountName || 'OneDrive'}`,
+    { fileId: item.id, fileName: item.name, bytes, ip: displayIp, country: loc.country }
+  ).catch(() => {});
 }
 
 function saveStore() {
@@ -843,22 +1097,23 @@ app.post('/api/storage/accounts', (req: Request, res: Response) => {
     };
   }
   if (Array.isArray(accounts)) {
+    const normalizedAccounts = accounts.map(normalizeServerAccount);
     // Harvest any clientId / clientSecret from accounts into serverStore.oauthConfig
-    for (const acc of accounts) {
-      if (acc.clientId || acc.client_id) {
+    for (const acc of normalizedAccounts) {
+      if (acc.clientId) {
         serverStore.oauthConfig = {
           ...serverStore.oauthConfig,
-          clientId: acc.clientId || acc.client_id,
+          clientId: acc.clientId,
         };
       }
-      if (acc.clientSecret || acc.client_secret) {
+      if (acc.clientSecret) {
         serverStore.oauthConfig = {
           ...serverStore.oauthConfig,
-          clientSecret: acc.clientSecret || acc.client_secret,
+          clientSecret: acc.clientSecret,
         };
       }
     }
-    serverStore.accounts = accounts;
+    serverStore.accounts = normalizedAccounts;
     if (typeof isDemoDismissed === 'boolean') {
       serverStore.isDemoDismissed = isDemoDismissed;
     }
@@ -1094,6 +1349,7 @@ app.post('/api/auth/oauth-config', (req: Request, res: Response) => {
 async function refreshMicrosoftAccountToken(params: {
   accountId?: string;
   refreshToken?: string;
+  accessToken?: string;
   clientId?: string;
   clientSecret?: string;
   tenant?: string;
@@ -1107,7 +1363,7 @@ async function refreshMicrosoftAccountToken(params: {
   error?: string;
   details?: any;
 } | null> {
-  const { accountId, refreshToken, clientId, clientSecret, tenant, origin } = params;
+  const { accountId, refreshToken, accessToken, clientId, clientSecret, tenant, origin } = params;
   const account = accountId
     ? serverStore.accounts.find((a) => a.id === accountId)
     : refreshToken
@@ -1124,18 +1380,34 @@ async function refreshMicrosoftAccountToken(params: {
     };
   }
 
-  // Discover clientId from params -> account -> serverStore.oauthConfig -> any sibling account -> env -> default
+  // Extract JWT claims from the account's accessToken (even if expired, it holds the exact Azure AD appid & tid!)
+  const jwtClaims = extractServerJwtClaims(
+    accessToken || account?.accessToken || account?.access_token
+  );
+
+  // Build ordered unique candidate client IDs so even imported accounts without saved clientId work automatically
   const siblingWithClientId = serverStore.accounts.find((a) => a.clientId || a.client_id);
-  const finalClientId =
-    clientId ||
-    account?.clientId ||
-    account?.client_id ||
-    serverStore.oauthConfig?.clientId ||
-    siblingWithClientId?.clientId ||
-    siblingWithClientId?.client_id ||
-    process.env.CLIENT_ID ||
-    process.env.VITE_CLIENT_ID ||
-    'c7e8e527-3932-4467-8451-b06bd9e013bf';
+  const siblingJwtClaims = extractServerJwtClaims(
+    serverStore.accounts.find((a) => a.accessToken || a.access_token)?.accessToken
+  );
+
+  const candidateClientIds = Array.from(
+    new Set(
+      [
+        jwtClaims.appId,
+        clientId,
+        account?.clientId,
+        account?.client_id,
+        serverStore.oauthConfig?.clientId,
+        siblingWithClientId?.clientId,
+        siblingWithClientId?.client_id,
+        siblingJwtClaims.appId,
+        process.env.CLIENT_ID,
+        process.env.VITE_CLIENT_ID,
+        'c7e8e527-3932-4467-8451-b06bd9e013bf',
+      ].filter((id): id is string => Boolean(id && typeof id === 'string' && id.trim()))
+    )
+  );
 
   // Discover clientSecret from params -> account -> serverStore.oauthConfig -> any sibling account -> env
   const siblingWithSecret = serverStore.accounts.find((a) => a.clientSecret || a.client_secret);
@@ -1150,6 +1422,7 @@ async function refreshMicrosoftAccountToken(params: {
     process.env.VITE_CLIENT_SECRET;
 
   const finalTenant =
+    jwtClaims.tenantId ||
     tenant ||
     account?.tenantId ||
     account?.tenant_id ||
@@ -1157,22 +1430,41 @@ async function refreshMicrosoftAccountToken(params: {
     process.env.TENANT_ID ||
     'common';
 
-  // Build candidate attempts to handle Web (confidential), Public Client, and different scope grants
-  const attempts: Array<{ tenant: string; useSecret: boolean; scope?: string; includeOrigin?: boolean }> = [];
+  // Build candidate attempts across candidateClientIds, confidential/public/SPA flows, and tenants
+  const attempts: Array<{
+    clientIdToUse: string;
+    tenant: string;
+    useSecret: boolean;
+    scope?: string;
+    includeOrigin?: boolean;
+  }> = [];
 
-  if (finalSecret) {
-    attempts.push({ tenant: finalTenant, useSecret: true });
-    attempts.push({ tenant: finalTenant, useSecret: true, scope: 'User.Read Files.ReadWrite.All offline_access' });
-  }
-  attempts.push({ tenant: finalTenant, useSecret: false });
-  attempts.push({ tenant: finalTenant, useSecret: false, includeOrigin: true });
-  attempts.push({ tenant: finalTenant, useSecret: false, scope: 'User.Read Files.ReadWrite.All offline_access' });
-
-  if (finalTenant !== 'common') {
+  for (const cid of candidateClientIds) {
     if (finalSecret) {
-      attempts.push({ tenant: 'common', useSecret: true });
+      attempts.push({ clientIdToUse: cid, tenant: finalTenant, useSecret: true });
+      attempts.push({
+        clientIdToUse: cid,
+        tenant: finalTenant,
+        useSecret: true,
+        scope: 'User.Read Files.ReadWrite.All offline_access',
+      });
     }
-    attempts.push({ tenant: 'common', useSecret: false });
+    attempts.push({ clientIdToUse: cid, tenant: finalTenant, useSecret: false, includeOrigin: true });
+    attempts.push({ clientIdToUse: cid, tenant: finalTenant, useSecret: false });
+    attempts.push({
+      clientIdToUse: cid,
+      tenant: finalTenant,
+      useSecret: false,
+      scope: 'User.Read Files.ReadWrite.All offline_access',
+    });
+
+    if (finalTenant !== 'common') {
+      if (finalSecret) {
+        attempts.push({ clientIdToUse: cid, tenant: 'common', useSecret: true });
+      }
+      attempts.push({ clientIdToUse: cid, tenant: 'common', useSecret: false, includeOrigin: true });
+      attempts.push({ clientIdToUse: cid, tenant: 'common', useSecret: false });
+    }
   }
 
   let lastData: any = null;
@@ -1180,7 +1472,7 @@ async function refreshMicrosoftAccountToken(params: {
   for (const attempt of attempts) {
     try {
       const bodyParams = new URLSearchParams({
-        client_id: finalClientId,
+        client_id: attempt.clientIdToUse,
         grant_type: 'refresh_token',
         refresh_token: finalRefreshToken,
       });
@@ -1219,7 +1511,9 @@ async function refreshMicrosoftAccountToken(params: {
           account.accessToken = data.access_token;
           account.refreshToken = newRefreshToken;
           account.expiresAt = expiresAt;
-          account.clientId = finalClientId;
+          account.clientId = attempt.clientIdToUse;
+          account.tenantId = attempt.tenant;
+          account.isLive = true;
           if (finalSecret) account.clientSecret = finalSecret;
           account.syncStatus = 'synced';
           account.needsReauth = false;
@@ -1256,12 +1550,13 @@ async function refreshMicrosoftAccountToken(params: {
 app.post('/api/auth/refresh', async (req: Request, res: Response) => {
   loadStore();
   try {
-    const { accountId, refreshToken, clientId, clientSecret, tenant = 'common' } = req.body;
+    const { accountId, refreshToken, accessToken, clientId, clientSecret, tenant = 'common' } = req.body;
     const origin = req.get('origin') || getAppUrl(req);
 
     const result = await refreshMicrosoftAccountToken({
       accountId,
       refreshToken,
+      accessToken,
       clientId,
       clientSecret,
       tenant,
@@ -1318,20 +1613,21 @@ app.post('/api/graph/proxy', async (req: Request, res: Response) => {
     const account = accountId
       ? serverStore.accounts.find((a) => a.id === accountId)
       : accessToken
-      ? serverStore.accounts.find((a) => a.accessToken === accessToken)
+      ? serverStore.accounts.find((a) => (a.accessToken || a.access_token) === accessToken)
       : null;
 
-    let activeToken = accessToken || account?.accessToken;
+    let activeToken = accessToken || account?.accessToken || account?.access_token;
     let refreshedAuth: { accessToken: string; refreshToken?: string; expiresAt?: number } | undefined;
 
-    // Proactively refresh if token is expired or within 5 minutes of expiring
-    const isExpiring =
-      account?.expiresAt && Date.now() >= Number(account.expiresAt) - 5 * 60 * 1000;
+    const claims = extractServerJwtClaims(activeToken);
+    const expiresAtMs = account?.expiresAt || claims.expMs;
+    const isExpiring = expiresAtMs && Date.now() >= Number(expiresAtMs) - 5 * 60 * 1000;
 
     if ((!activeToken || isExpiring) && (refreshToken || account?.refreshToken || account?.refresh_token)) {
       const refreshed = await refreshMicrosoftAccountToken({
         accountId: account?.id || accountId,
         refreshToken: refreshToken || account?.refreshToken || account?.refresh_token,
+        accessToken: activeToken,
         clientId: clientId || account?.clientId,
         clientSecret: clientSecret || account?.clientSecret,
         tenant: tenant || account?.tenantId,
@@ -1380,6 +1676,7 @@ app.post('/api/graph/proxy', async (req: Request, res: Response) => {
       const refreshed = await refreshMicrosoftAccountToken({
         accountId: account?.id || accountId,
         refreshToken: refreshToken || account?.refreshToken || account?.refresh_token,
+        accessToken: activeToken,
         clientId: clientId || account?.clientId,
         clientSecret: clientSecret || account?.clientSecret,
         tenant: tenant || account?.tenantId,
@@ -1412,7 +1709,6 @@ app.post('/api/graph/proxy', async (req: Request, res: Response) => {
             ? data.message
             : `Microsoft Graph returned status ${graphRes.status}`;
 
-        // Avoid returning raw 401 to prevent false-positive crash alerts while preserving error payload
         const responseStatus = graphRes.status === 401 ? 200 : graphRes.status;
         return res.status(responseStatus).json({
           _graphError: true,
@@ -1434,6 +1730,232 @@ app.post('/api/graph/proxy', async (req: Request, res: Response) => {
     res.status(500).json({ error: err.message || 'Graph proxy call failed' });
   }
 });
+
+// Helper to upload a Buffer directly to a Microsoft OneDrive account (supports both <=4MB PUT and >4MB UploadSession + Root Fallback)
+async function uploadBufferToOneDriveAccount(params: {
+  account: any;
+  fileName: string;
+  fileBuffer: Buffer;
+  mimeType?: string;
+  parentFolderId?: string | null;
+  accessToken?: string;
+  refreshToken?: string;
+  clientId?: string;
+  clientSecret?: string;
+  tenant?: string;
+  origin?: string;
+}): Promise<{
+  success: boolean;
+  item?: any;
+  refreshedAuth?: { accessToken: string; refreshToken?: string; expiresAt?: number };
+  error?: string;
+  status?: number;
+}> {
+  const {
+    account,
+    fileName,
+    fileBuffer,
+    mimeType = 'application/octet-stream',
+    parentFolderId,
+    accessToken,
+    refreshToken,
+    clientId,
+    clientSecret,
+    tenant,
+    origin,
+  } = params;
+
+  const safeFileName = sanitizeServerFileName(fileName);
+  let activeToken = accessToken || account?.accessToken || account?.access_token;
+  let refreshedAuth: { accessToken: string; refreshToken?: string; expiresAt?: number } | undefined;
+
+  const claims = extractServerJwtClaims(activeToken);
+  const expiresAtMs = account?.expiresAt || claims.expMs;
+  const isExpiring = !activeToken || (expiresAtMs && Date.now() >= Number(expiresAtMs) - 5 * 60 * 1000);
+
+  if (isExpiring && (refreshToken || account?.refreshToken || account?.refresh_token)) {
+    const refreshed = await refreshMicrosoftAccountToken({
+      accountId: account?.id,
+      refreshToken: refreshToken || account?.refreshToken || account?.refresh_token,
+      accessToken: activeToken,
+      clientId: clientId || account?.clientId,
+      clientSecret: clientSecret || account?.clientSecret,
+      tenant: tenant || account?.tenantId,
+      origin,
+    });
+    if (refreshed?.success && refreshed.accessToken) {
+      activeToken = refreshed.accessToken;
+      refreshedAuth = {
+        accessToken: refreshed.accessToken,
+        refreshToken: refreshed.refreshToken,
+        expiresAt: refreshed.expiresAt,
+      };
+    }
+  }
+
+  if (!activeToken) {
+    return {
+      success: false,
+      status: 401,
+      error: 'No valid Microsoft Graph access token available for upload.',
+    };
+  }
+
+  const isRootOrLocal =
+    !parentFolderId ||
+    parentFolderId === 'root' ||
+    String(parentFolderId).startsWith('fold-') ||
+    String(parentFolderId).startsWith('upload-') ||
+    String(parentFolderId).startsWith('copy-');
+
+  const rootBase = `/me/drive/root:/${encodeURIComponent(safeFileName)}`;
+  const targetBase = isRootOrLocal
+    ? rootBase
+    : `/me/drive/items/${parentFolderId}:/${encodeURIComponent(safeFileName)}`;
+
+  const FOUR_MB = 4 * 1024 * 1024;
+
+  // For files > 4MB, use createUploadSession on Microsoft Graph
+  if (fileBuffer.length > FOUR_MB) {
+    const createSession = async (basePath: string, tokenToUse: string) => {
+      return fetch(`https://graph.microsoft.com/v1.0${basePath}:/createUploadSession`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${tokenToUse}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          item: {
+            '@microsoft.graph.conflictBehavior': 'rename',
+            name: safeFileName,
+          },
+        }),
+      });
+    };
+
+    let sessionRes = await createSession(targetBase, activeToken);
+    if (sessionRes.status === 401 && (refreshToken || account?.refreshToken || account?.refresh_token)) {
+      const refreshed = await refreshMicrosoftAccountToken({
+        accountId: account?.id,
+        refreshToken: refreshToken || account?.refreshToken || account?.refresh_token,
+        accessToken: activeToken,
+        clientId: clientId || account?.clientId,
+        clientSecret: clientSecret || account?.clientSecret,
+        tenant: tenant || account?.tenantId,
+        origin,
+      });
+      if (refreshed?.success && refreshed.accessToken) {
+        activeToken = refreshed.accessToken;
+        refreshedAuth = {
+          accessToken: refreshed.accessToken,
+          refreshToken: refreshed.refreshToken,
+          expiresAt: refreshed.expiresAt,
+        };
+        sessionRes = await createSession(targetBase, activeToken);
+      }
+    }
+
+    if ((sessionRes.status === 404 || sessionRes.status === 400) && targetBase !== rootBase) {
+      sessionRes = await createSession(rootBase, activeToken);
+    }
+
+    const sessionData = await sessionRes.json().catch(() => null);
+    if (sessionRes.ok && sessionData?.uploadUrl) {
+      const chunkSize = 327680 * 10; // 3.2 MB
+      let offset = 0;
+      let finalItem: any = null;
+
+      while (offset < fileBuffer.length) {
+        const chunkEnd = Math.min(offset + chunkSize, fileBuffer.length);
+        const slice = fileBuffer.subarray(offset, chunkEnd);
+        const chunkRes = await fetch(sessionData.uploadUrl, {
+          method: 'PUT',
+          headers: {
+            'Content-Length': String(slice.length),
+            'Content-Range': `bytes ${offset}-${chunkEnd - 1}/${fileBuffer.length}`,
+          },
+          body: new Uint8Array(slice),
+        });
+        if (!chunkRes.ok && chunkRes.status !== 202) {
+          const errJson = await chunkRes.json().catch(() => null);
+          return {
+            success: false,
+            status: chunkRes.status,
+            error: errJson?.error?.message || `OneDrive chunk upload failed (${chunkRes.status})`,
+          };
+        }
+        if (chunkRes.status === 200 || chunkRes.status === 201) {
+          finalItem = await chunkRes.json().catch(() => null);
+        }
+        offset = chunkEnd;
+      }
+
+      if (finalItem) {
+        return {
+          success: true,
+          item: finalItem,
+          refreshedAuth,
+        };
+      }
+    }
+  }
+
+  // Standard PUT upload with conflictBehavior=rename and automatic root fallback
+  const executePut = async (basePath: string, tokenToUse: string) => {
+    const putUrl = `https://graph.microsoft.com/v1.0${basePath}:/content?@microsoft.graph.conflictBehavior=rename`;
+    return fetch(putUrl, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${tokenToUse}`,
+        'Content-Type': mimeType,
+      },
+      body: new Uint8Array(fileBuffer),
+    });
+  };
+
+  let uploadRes = await executePut(targetBase, activeToken);
+
+  if (uploadRes.status === 401 && (refreshToken || account?.refreshToken || account?.refresh_token)) {
+    const refreshed = await refreshMicrosoftAccountToken({
+      accountId: account?.id,
+      refreshToken: refreshToken || account?.refreshToken || account?.refresh_token,
+      accessToken: activeToken,
+      clientId: clientId || account?.clientId,
+      clientSecret: clientSecret || account?.clientSecret,
+      tenant: tenant || account?.tenantId,
+      origin,
+    });
+    if (refreshed?.success && refreshed.accessToken) {
+      activeToken = refreshed.accessToken;
+      refreshedAuth = {
+        accessToken: refreshed.accessToken,
+        refreshToken: refreshed.refreshToken,
+        expiresAt: refreshed.expiresAt,
+      };
+      uploadRes = await executePut(targetBase, activeToken);
+    }
+  }
+
+  // If parentFolderId belonged to another OneDrive account (e.g. during Load Balancing), retry at root
+  if ((uploadRes.status === 404 || uploadRes.status === 400) && targetBase !== rootBase) {
+    uploadRes = await executePut(rootBase, activeToken);
+  }
+
+  const data = await uploadRes.json().catch(() => null);
+  if (!uploadRes.ok || !data) {
+    return {
+      success: false,
+      status: uploadRes.status,
+      error: data?.error?.message || `OneDrive upload returned ${uploadRes.status}`,
+    };
+  }
+
+  return {
+    success: true,
+    item: data,
+    refreshedAuth,
+  };
+}
 
 // Direct OneDrive binary upload proxy with automatic server-side token refresh
 app.post('/api/graph/upload', async (req: Request, res: Response) => {
@@ -1459,93 +1981,58 @@ app.post('/api/graph/upload', async (req: Request, res: Response) => {
     const account = accountId
       ? serverStore.accounts.find((a) => a.id === accountId)
       : accessToken
-      ? serverStore.accounts.find((a) => a.accessToken === accessToken)
+      ? serverStore.accounts.find((a) => (a.accessToken || a.access_token) === accessToken)
       : null;
-
-    let activeToken = accessToken || account?.accessToken;
-    let refreshedAuth: { accessToken: string; refreshToken?: string; expiresAt?: number } | undefined;
-
-    const isExpiring =
-      account?.expiresAt && Date.now() >= Number(account.expiresAt) - 5 * 60 * 1000;
-
-    if ((!activeToken || isExpiring) && (refreshToken || account?.refreshToken || account?.refresh_token)) {
-      const refreshed = await refreshMicrosoftAccountToken({
-        accountId: account?.id || accountId,
-        refreshToken: refreshToken || account?.refreshToken || account?.refresh_token,
-        clientId: clientId || account?.clientId,
-        clientSecret: clientSecret || account?.clientSecret,
-        tenant: tenant || account?.tenantId,
-        origin: req.get('origin') || getAppUrl(req),
-      });
-      if (refreshed?.success && refreshed.accessToken) {
-        activeToken = refreshed.accessToken;
-        refreshedAuth = {
-          accessToken: refreshed.accessToken,
-          refreshToken: refreshed.refreshToken,
-          expiresAt: refreshed.expiresAt,
-        };
-      }
-    }
 
     const cleanBase64 = base64Content.includes(',') ? base64Content.split(',')[1] : base64Content;
     const fileBuffer = Buffer.from(cleanBase64, 'base64');
 
-    const parentPath =
-      !parentFolderId || parentFolderId === 'root' || parentFolderId.startsWith('fold-')
-        ? `/me/drive/root:/${encodeURIComponent(fileName)}:/content`
-        : `/me/drive/items/${parentFolderId}:/${encodeURIComponent(fileName)}:/content`;
-
-    const uploadUrl = `https://graph.microsoft.com/v1.0${parentPath}`;
-
-    let uploadRes = await fetch(uploadUrl, {
-      method: 'PUT',
-      headers: {
-        Authorization: `Bearer ${activeToken}`,
-        'Content-Type': mimeType || 'application/octet-stream',
-      },
-      body: fileBuffer,
+    const result = await uploadBufferToOneDriveAccount({
+      account,
+      fileName,
+      fileBuffer,
+      mimeType,
+      parentFolderId,
+      accessToken,
+      refreshToken,
+      clientId,
+      clientSecret,
+      tenant,
+      origin: req.get('origin') || getAppUrl(req),
     });
 
-    if (uploadRes.status === 401 && (refreshToken || account?.refreshToken || account?.refresh_token)) {
-      const refreshed = await refreshMicrosoftAccountToken({
-        accountId: account?.id || accountId,
-        refreshToken: refreshToken || account?.refreshToken || account?.refresh_token,
-        clientId: clientId || account?.clientId,
-        clientSecret: clientSecret || account?.clientSecret,
-        tenant: tenant || account?.tenantId,
-        origin: req.get('origin') || getAppUrl(req),
-      });
-      if (refreshed?.success && refreshed.accessToken) {
-        activeToken = refreshed.accessToken;
-        refreshedAuth = {
-          accessToken: refreshed.accessToken,
-          refreshToken: refreshed.refreshToken,
-          expiresAt: refreshed.expiresAt,
-        };
-        uploadRes = await fetch(uploadUrl, {
-          method: 'PUT',
-          headers: {
-            Authorization: `Bearer ${activeToken}`,
-            'Content-Type': mimeType || 'application/octet-stream',
-          },
-          body: fileBuffer,
-        });
-      }
-    }
-
-    const data = await uploadRes.json().catch(() => null);
-    if (!uploadRes.ok || !data) {
+    if (!result.success || !result.item) {
       return res.status(200).json({
         success: false,
-        status: uploadRes.status,
-        error: data?.error?.message || `OneDrive upload returned ${uploadRes.status}`,
+        status: result.status || 400,
+        error: result.error || 'OneDrive upload failed',
       });
+    }
+
+    dispatchWebhookAlert(
+      'onUpload',
+      'File Uploaded to OneDrive',
+      `File: ${result.item.name} (${(fileBuffer.length / (1024 * 1024)).toFixed(2)} MB)\nAccount: ${account?.name || 'OneDrive'}`,
+      { fileId: result.item.id, fileName: result.item.name, size: fileBuffer.length }
+    ).catch(() => {});
+
+    // Check low storage warning (< 10% remaining)
+    if (account?.quota?.total > 0) {
+      const remRatio = (account.quota.remaining || 0) / account.quota.total;
+      if (remRatio < 0.1) {
+        dispatchWebhookAlert(
+          'onLowStorage',
+          'Low Storage Quota Warning (<10%)',
+          `Account ${account.name} has less than ${(remRatio * 100).toFixed(1)}% free space remaining!`,
+          { accountId: account.id, accountName: account.name }
+        ).catch(() => {});
+      }
     }
 
     res.json({
       success: true,
-      item: data,
-      _refreshedAuth: refreshedAuth,
+      item: result.item,
+      _refreshedAuth: result.refreshedAuth,
     });
   } catch (err: any) {
     res.status(200).json({
@@ -1553,6 +2040,428 @@ app.post('/api/graph/upload', async (req: Request, res: Response) => {
       error: err.message || 'Server OneDrive upload failed',
     });
   }
+});
+
+// Remote URL Cloud Pull directly into OneDrive or Server Store
+app.post('/api/drive/remote-url-upload', async (req: Request, res: Response) => {
+  try {
+    loadStore();
+    const { url, customFileName, accountId, parentFolderId } = req.body || {};
+    if (!url || typeof url !== 'string') {
+      return res.status(400).json({ error: 'Valid remote URL is required' });
+    }
+
+    const remoteRes = await fetch(url, {
+      headers: {
+        'User-Agent': 'MultiDrive-Cloud-Pull/2.0',
+      },
+    });
+
+    if (!remoteRes.ok) {
+      return res.status(400).json({
+        error: `Remote server returned HTTP ${remoteRes.status} (${remoteRes.statusText})`,
+      });
+    }
+
+    const contentType = remoteRes.headers.get('content-type') || 'application/octet-stream';
+    const arrayBuffer = await remoteRes.arrayBuffer();
+    const fileBuffer = Buffer.from(arrayBuffer);
+
+    let derivedName = customFileName?.trim();
+    if (!derivedName) {
+      try {
+        const parsedUrl = new URL(url);
+        const pathParts = parsedUrl.pathname.split('/').filter(Boolean);
+        derivedName = decodeURIComponent(pathParts[pathParts.length - 1] || '');
+      } catch {}
+    }
+    if (!derivedName) {
+      derivedName = `cloud-pull-${Date.now()}.bin`;
+    }
+    derivedName = sanitizeServerFileName(derivedName);
+
+    const account = serverStore.accounts.find((a) => a.id === accountId) || serverStore.accounts[0];
+    let graphItem: any = null;
+    let refreshedAuth: any = null;
+
+    if (account && (account.isLive || account.accessToken || account.refreshToken || account.refresh_token)) {
+      const uploadOut = await uploadBufferToOneDriveAccount({
+        account,
+        fileName: derivedName,
+        fileBuffer,
+        mimeType: contentType,
+        parentFolderId,
+        origin: req.get('origin') || getAppUrl(req),
+      });
+      if (uploadOut.success && uploadOut.item) {
+        graphItem = uploadOut.item;
+        refreshedAuth = uploadOut.refreshedAuth;
+      }
+    }
+
+    dispatchWebhookAlert(
+      'onUpload',
+      'Remote URL Pulled to OneDrive',
+      `File: ${graphItem?.name || derivedName} (${(fileBuffer.length / (1024 * 1024)).toFixed(2)} MB)\nAccount: ${account?.name || 'OneDrive'}`,
+      { fileName: graphItem?.name || derivedName, size: fileBuffer.length, sourceUrl: url }
+    ).catch(() => {});
+
+    res.json({
+      success: true,
+      fileName: graphItem?.name || derivedName,
+      size: graphItem?.size || fileBuffer.length,
+      mimeType: contentType,
+      graphItem,
+      _refreshedAuth: refreshedAuth,
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      error: err.message || 'Failed to pull remote URL into OneDrive',
+    });
+  }
+});
+
+// ==========================================
+// DUPLICATE FILE FINDER & CROSS-ACCOUNT DEDUPLICATOR
+// ==========================================
+app.post('/api/drive/deduplicate', async (req: Request, res: Response) => {
+  loadStore();
+  try {
+    const { itemIds = [] } = req.body;
+    if (!Array.isArray(itemIds) || itemIds.length === 0) {
+      return res.status(400).json({ error: 'No duplicate items specified for removal' });
+    }
+
+    const idSet = new Set<string>(itemIds);
+    const itemsToDelete = serverStore.items.filter((i) => idSet.has(i.id));
+    let reclaimedBytes = 0;
+
+    for (const item of itemsToDelete) {
+      reclaimedBytes += item.size || 0;
+      const acc = serverStore.accounts.find((a) => a.id === item.accountId);
+      if (acc) {
+        if (acc.quota) {
+          acc.quota.used = Math.max(0, (acc.quota.used || 0) - (item.size || 0));
+          acc.quota.remaining = (acc.quota.remaining || 0) + (item.size || 0);
+        }
+        // If live account and item ID is a real Graph item ID, delete on OneDrive as well
+        if (
+          (acc.isLive || acc.accessToken || acc.refreshToken) &&
+          !String(item.id).startsWith('file-') &&
+          !String(item.id).startsWith('upload-') &&
+          !String(item.id).startsWith('copy-')
+        ) {
+          try {
+            let tokenToUse = acc.accessToken || acc.access_token;
+            const refreshed = await refreshMicrosoftAccountToken({ accountId: acc.id });
+            if (refreshed?.accessToken) tokenToUse = refreshed.accessToken;
+            if (tokenToUse) {
+              await fetch(`https://graph.microsoft.com/v1.0/me/drive/items/${item.id}`, {
+                method: 'DELETE',
+                headers: { Authorization: `Bearer ${tokenToUse}` },
+              });
+            }
+          } catch {}
+        }
+      }
+    }
+
+    serverStore.items = serverStore.items.filter((i) => !idSet.has(i.id));
+    saveStore();
+
+    dispatchWebhookAlert(
+      'onDeduplicate',
+      'Cross-Account Deduplication Completed',
+      `Removed ${itemsToDelete.length} duplicate file(s) and freed ${(reclaimedBytes / (1024 * 1024)).toFixed(2)} MB across connected OneDrive accounts.`,
+      { deletedCount: itemsToDelete.length, reclaimedBytes }
+    ).catch(() => {});
+
+    res.json({
+      success: true,
+      deletedCount: itemsToDelete.length,
+      reclaimedBytes,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Deduplication failed' });
+  }
+});
+
+// ==========================================
+// PUBLIC FILE REQUEST / DROPZONE LINKS ("UPLOAD-ONLY SHARE LINKS")
+// ==========================================
+app.get('/api/file-requests', (_req: Request, res: Response) => {
+  loadStore();
+  res.json({ requests: serverStore.fileRequests || [] });
+});
+
+app.post('/api/file-requests', (req: Request, res: Response) => {
+  loadStore();
+  const {
+    title,
+    description,
+    accountId = 'auto',
+    accountName = 'Auto Load-Balanced OneDrive',
+    folderId = null,
+    folderName = 'Root Folder',
+    pin,
+    expiresAt,
+    maxFileSizeMB = 500,
+  } = req.body;
+
+  if (!title || !String(title).trim()) {
+    return res.status(400).json({ error: 'File request title is required' });
+  }
+
+  const newReq = {
+    id: `req-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
+    title: String(title).trim(),
+    description: description ? String(description).trim() : '',
+    accountId,
+    accountName,
+    folderId: folderId || null,
+    folderName: folderName || 'Root (/onedrive)',
+    pin: pin && String(pin).trim() ? String(pin).trim() : undefined,
+    expiresAt: expiresAt && String(expiresAt).trim() ? String(expiresAt).trim() : undefined,
+    maxFileSizeMB: Number(maxFileSizeMB) || 500,
+    createdAt: new Date().toISOString(),
+    uploadCount: 0,
+    totalBytesUploaded: 0,
+    active: true,
+  };
+
+  serverStore.fileRequests = [newReq, ...(serverStore.fileRequests || [])];
+  saveStore();
+  res.json({ success: true, request: newReq });
+});
+
+app.delete('/api/file-requests/:id', (req: Request, res: Response) => {
+  loadStore();
+  const id = req.params.id;
+  serverStore.fileRequests = (serverStore.fileRequests || []).filter((r) => r.id !== id);
+  saveStore();
+  res.json({ success: true });
+});
+
+// Public endpoint to inspect a File Request Dropzone before uploading
+app.get('/api/public/file-request/:id', (req: Request, res: Response) => {
+  loadStore();
+  const id = req.params.id;
+  const reqItem = (serverStore.fileRequests || []).find((r) => r.id === id && r.active);
+  if (!reqItem) {
+    return res.status(404).json({ error: 'File Request link not found or has been deactivated.' });
+  }
+
+  const isExpired = reqItem.expiresAt ? new Date(reqItem.expiresAt).getTime() < Date.now() : false;
+
+  res.json({
+    id: reqItem.id,
+    title: reqItem.title,
+    description: reqItem.description,
+    accountName: reqItem.accountName,
+    folderName: reqItem.folderName,
+    requiresPin: Boolean(reqItem.pin && reqItem.pin.trim() !== ''),
+    expiresAt: reqItem.expiresAt,
+    isExpired,
+    maxFileSizeMB: reqItem.maxFileSizeMB || 500,
+    uploadCount: reqItem.uploadCount || 0,
+  });
+});
+
+// Public endpoint to upload files to a File Request Dropzone (without admin login)
+app.post('/api/public/file-request/:id/upload', async (req: Request, res: Response) => {
+  loadStore();
+  try {
+    const id = req.params.id;
+    const reqItem = (serverStore.fileRequests || []).find((r) => r.id === id && r.active);
+    if (!reqItem) {
+      return res.status(404).json({ error: 'File Request link not found or inactive.' });
+    }
+
+    if (reqItem.expiresAt && new Date(reqItem.expiresAt).getTime() < Date.now()) {
+      return res.status(410).json({ error: 'This File Request dropzone link has expired.' });
+    }
+
+    const { fileName, mimeType, base64Content, pin, uploaderName } = req.body;
+    if (reqItem.pin && reqItem.pin.trim() !== '') {
+      if ((pin || '').trim() !== reqItem.pin.trim()) {
+        return res.status(401).json({ error: 'Invalid security PIN for this File Request dropzone.' });
+      }
+    }
+
+    if (!fileName || !base64Content) {
+      return res.status(400).json({ error: 'Missing file name or content.' });
+    }
+
+    const cleanBase64 = base64Content.includes(',') ? base64Content.split(',')[1] : base64Content;
+    const fileBuffer = Buffer.from(cleanBase64, 'base64');
+
+    const maxBytes = (reqItem.maxFileSizeMB || 500) * 1024 * 1024;
+    if (fileBuffer.length > maxBytes) {
+      return res.status(400).json({
+        error: `File exceeds the maximum allowed size of ${reqItem.maxFileSizeMB} MB for this dropzone.`,
+      });
+    }
+
+    // Choose target OneDrive account (specific account or best free space if 'auto')
+    let targetAccount = serverStore.accounts.find((a) => a.id === reqItem.accountId);
+    if (!targetAccount || reqItem.accountId === 'auto') {
+      const sortedByFree = [...serverStore.accounts].sort(
+        (a, b) => (b.quota?.remaining || 0) - (a.quota?.remaining || 0)
+      );
+      targetAccount = sortedByFree[0];
+    }
+
+    if (!targetAccount) {
+      return res.status(400).json({ error: 'No connected OneDrive account available to receive files.' });
+    }
+
+    const prefixedFileName = uploaderName?.trim()
+      ? `[${ sanitizeServerFileName(uploaderName.trim()) }]_${sanitizeServerFileName(fileName)}`
+      : sanitizeServerFileName(fileName);
+
+    let graphItem: any = null;
+    if (targetAccount.isLive || targetAccount.accessToken || targetAccount.refreshToken) {
+      const uploaded = await uploadBufferToOneDriveAccount({
+        account: targetAccount,
+        fileName: prefixedFileName,
+        fileBuffer,
+        mimeType: mimeType || 'application/octet-stream',
+        parentFolderId: reqItem.folderId,
+        origin: req.get('origin') || getAppUrl(req),
+      });
+      if (uploaded.success && uploaded.item) {
+        graphItem = uploaded.item;
+      }
+    }
+
+    const newItem = {
+      id: graphItem?.id || `dropzone-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      name: graphItem?.name || prefixedFileName,
+      accountId: targetAccount.id,
+      accountName: targetAccount.name,
+      accountColor: targetAccount.color || '#0284c7',
+      parentId: reqItem.folderId || null,
+      isFolder: false,
+      size: graphItem?.size || fileBuffer.length,
+      lastModifiedDateTime: new Date().toISOString(),
+      createdDateTime: new Date().toISOString(),
+      webUrl:
+        graphItem?.webUrl ||
+        `https://${targetAccount.tenantName || 'onedrive.live.com'}/Documents/${encodeURIComponent(prefixedFileName)}`,
+      downloadUrl: graphItem?.['@microsoft.graph.downloadUrl'] || undefined,
+      mimeType: mimeType || 'application/octet-stream',
+      fileType: 'other',
+      content: fileBuffer.length <= 2 * 1024 * 1024 ? base64Content : undefined,
+    };
+
+    serverStore.items = [newItem, ...serverStore.items];
+    reqItem.uploadCount = (reqItem.uploadCount || 0) + 1;
+    reqItem.totalBytesUploaded = (reqItem.totalBytesUploaded || 0) + fileBuffer.length;
+
+    if (targetAccount.quota) {
+      targetAccount.quota.used = (targetAccount.quota.used || 0) + fileBuffer.length;
+      targetAccount.quota.remaining = Math.max(0, (targetAccount.quota.remaining || 0) - fileBuffer.length);
+    }
+
+    saveStore();
+
+    dispatchWebhookAlert(
+      'onFileRequestUpload',
+      `New Dropzone Upload: ${reqItem.title}`,
+      `File: ${newItem.name} (${(fileBuffer.length / (1024 * 1024)).toFixed(2)} MB)\nUploaded by: ${uploaderName || 'External Guest'}\nDestination: ${targetAccount.name}`,
+      { requestId: reqItem.id, fileName: newItem.name, size: fileBuffer.length, uploaderName }
+    ).catch(() => {});
+
+    res.json({
+      success: true,
+      item: {
+        id: newItem.id,
+        name: newItem.name,
+        size: newItem.size,
+        accountName: targetAccount.name,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Dropzone upload failed' });
+  }
+});
+
+// ==========================================
+// TELEGRAM / DISCORD / WEBHOOK ALERTS CONFIGURATION
+// ==========================================
+app.get('/api/webhooks/config', (_req: Request, res: Response) => {
+  loadStore();
+  res.json({
+    config: serverStore.webhooks || {
+      enabled: false,
+      telegramEnabled: false,
+      telegramBotToken: '',
+      telegramChatId: '',
+      discordEnabled: false,
+      discordWebhookUrl: '',
+      customWebhookEnabled: false,
+      customWebhookUrl: '',
+      events: {
+        onUpload: true,
+        onDownload: true,
+        onLowStorage: true,
+        onFileRequestUpload: true,
+        onDeduplicate: true,
+      },
+    },
+    logs: serverStore.webhookLogs || [],
+  });
+});
+
+app.post('/api/webhooks/config', (req: Request, res: Response) => {
+  loadStore();
+  const { config } = req.body;
+  if (!config || typeof config !== 'object') {
+    return res.status(400).json({ error: 'Invalid webhook configuration' });
+  }
+  serverStore.webhooks = {
+    enabled: Boolean(config.enabled),
+    telegramEnabled: Boolean(config.telegramEnabled),
+    telegramBotToken: String(config.telegramBotToken || '').trim(),
+    telegramChatId: String(config.telegramChatId || '').trim(),
+    discordEnabled: Boolean(config.discordEnabled),
+    discordWebhookUrl: String(config.discordWebhookUrl || '').trim(),
+    customWebhookEnabled: Boolean(config.customWebhookEnabled),
+    customWebhookUrl: String(config.customWebhookUrl || '').trim(),
+    events: {
+      onUpload: config.events?.onUpload !== false,
+      onDownload: config.events?.onDownload !== false,
+      onLowStorage: config.events?.onLowStorage !== false,
+      onFileRequestUpload: config.events?.onFileRequestUpload !== false,
+      onDeduplicate: config.events?.onDeduplicate !== false,
+    },
+  };
+  saveStore();
+  res.json({ success: true, config: serverStore.webhooks });
+});
+
+app.post('/api/webhooks/test', async (req: Request, res: Response) => {
+  loadStore();
+  const { config } = req.body;
+  if (config && typeof config === 'object') {
+    serverStore.webhooks = {
+      ...serverStore.webhooks,
+      ...config,
+    };
+    saveStore();
+  }
+
+  await dispatchWebhookAlert(
+    'test',
+    'Test Notification from MultiDrive',
+    `Real-time alerts are active across ${serverStore.accounts.length} connected OneDrive account(s).`,
+    { test: true }
+  );
+
+  res.json({
+    success: true,
+    logs: serverStore.webhookLogs || [],
+  });
 });
 
 // ==========================================

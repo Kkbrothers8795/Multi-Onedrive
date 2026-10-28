@@ -14,6 +14,7 @@ import {
   CheckSquare,
   Cloud,
   Zap,
+  Activity,
 } from 'lucide-react';
 import { ViewMode, SortField, SortOrder, DriveAccount } from '../types/drive';
 
@@ -29,6 +30,9 @@ interface ActionBarProps {
   selectedCount: number;
   onUploadClick: () => void;
   onNewFolderClick: () => void;
+  onOpenTransferModal?: () => void;
+  activeUploadCount?: number;
+  totalTransfersCount?: number;
   onBatchDownloadZip: () => void;
   onBatchMoveClick: () => void;
   onBatchMigrateClick?: () => void;
@@ -54,6 +58,9 @@ export const ActionBar: React.FC<ActionBarProps> = ({
   selectedCount,
   onUploadClick,
   onNewFolderClick,
+  onOpenTransferModal,
+  activeUploadCount = 0,
+  totalTransfersCount = 0,
   onBatchDownloadZip,
   onBatchMoveClick,
   onBatchMigrateClick,
@@ -155,11 +162,42 @@ export const ActionBar: React.FC<ActionBarProps> = ({
             <button
               type="button"
               onClick={onUploadClick}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold rounded-xl shadow-sm transition-all active:scale-95"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white text-xs font-semibold rounded-xl shadow-sm shadow-sky-600/20 transition-all active:scale-95"
             >
               <Upload className="w-3.5 h-3.5" />
               <span>Upload</span>
             </button>
+
+            {onOpenTransferModal && (
+              <button
+                type="button"
+                onClick={onOpenTransferModal}
+                title="Open OneDrive Upload Transfer Manager (live speed, remaining size, ETA & URL Cloud Pull)"
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition-all ${
+                  activeUploadCount > 0
+                    ? 'bg-sky-500/15 text-sky-300 border-sky-500/40 shadow-sm'
+                    : 'bg-slate-800/90 hover:bg-slate-800 text-slate-200 border-slate-700'
+                }`}
+              >
+                <Activity
+                  className={`w-3.5 h-3.5 ${
+                    activeUploadCount > 0 ? 'text-sky-400 animate-pulse' : 'text-sky-400'
+                  }`}
+                />
+                <span>Transfers</span>
+                {(activeUploadCount > 0 || totalTransfersCount > 0) && (
+                  <span
+                    className={`px-1.5 py-0.2 rounded-md text-[10px] font-mono font-bold tabular-nums ${
+                      activeUploadCount > 0
+                        ? 'bg-sky-500 text-white'
+                        : 'bg-slate-700 text-slate-300'
+                    }`}
+                  >
+                    {activeUploadCount > 0 ? `${activeUploadCount} live` : totalTransfersCount}
+                  </span>
+                )}
+              </button>
+            )}
 
             <button
               type="button"

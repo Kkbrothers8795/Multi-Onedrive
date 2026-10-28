@@ -27,17 +27,96 @@ import {
   ShieldCheck,
   Sparkles,
   Info,
+  Subtitles,
+  ListMusic,
+  SkipBack,
+  SkipForward,
+  Repeat,
+  Upload,
+  PictureInPicture2,
 } from 'lucide-react';
 import { DriveItem } from '../types/drive';
 import { formatBytes } from '../utils/driveLogic';
+
+interface SubtitleCue {
+  start: number;
+  end: number;
+  text: string;
+}
+
+function parseTimecodeToSeconds(tc: string): number {
+  const clean = tc.trim().replace(',', '.');
+  const parts = clean.split(':');
+  if (parts.length === 3) {
+    return (
+      parseFloat(parts[0]) * 3600 +
+      parseFloat(parts[1]) * 60 +
+      parseFloat(parts[2])
+    );
+  }
+  if (parts.length === 2) {
+    return parseFloat(parts[0]) * 60 + parseFloat(parts[1]);
+  }
+  return 0;
+}
+
+function parseSubtitleCues(rawText: string): SubtitleCue[] {
+  const cues: SubtitleCue[] = [];
+  const normalized = rawText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const blocks = normalized.split(/\n\s*\n/);
+
+  for (const block of blocks) {
+    const lines = block.trim().split('\n');
+    if (lines.length === 0) continue;
+    const arrowLineIdx = lines.findIndex((l) => l.includes('-->'));
+    if (arrowLineIdx === -1) continue;
+
+    const timeLine = lines[arrowLineIdx];
+    const [startRaw, endRaw] = timeLine.split('-->');
+    if (!startRaw || !endRaw) continue;
+
+    const start = parseTimecodeToSeconds(startRaw.trim().split(' ')[0]);
+    const end = parseTimecodeToSeconds(endRaw.trim().split(' ')[0]);
+    const text = lines
+      .slice(arrowLineIdx + 1)
+      .join('\n')
+      .replace(/<[^>]+>/g, '')
+      .trim();
+
+    if (text && end >= start) {
+      cues.push({ start, end, text });
+    }
+  }
+  return cues;
+}
+
+function convertSrtToWebVtt(rawText: string): string {
+  const normalized = rawText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  if (normalized.trim().startsWith('WEBVTT')) {
+    return normalized;
+  }
+  const vttBody = normalized.replace(
+    /(\d{2}:\d{2}:\d{2}),(\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}),(\d{3})/g,
+    '$1.$2 --> $3.$4'
+  );
+  return `WEBVTT\n\n${vttBody}`;
+}
 
 interface FileViewerProps {
   item: DriveItem;
   className?: string;
   onDownload?: () => void;
+  siblingItems?: DriveItem[];
+  onSelectItem?: (nextItem: DriveItem) => void;
 }
 
-export const FileViewer: React.FC<FileViewerProps> = ({ item, className = '', onDownload }) => {
+export const FileViewer: React.FC<FileViewerProps> = ({
+  item,
+  className = '',
+  onDownload,
+  siblingItems = [],
+  onSelectItem,
+}) => {
   // Image state
   const [zoom, setZoom] = useState<number>(1);
   const [rotation, setRotation] = useState<number>(0);
@@ -51,6 +130,7 @@ export const FileViewer: React.FC<FileViewerProps> = ({ item, className = '', on
 
   // Video state
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const subtitleInputRef = useRef<HTMLInputElement | null>(null);
   const [isVideoPlaying, setIsVideoPlaying] = useState<boolean>(false);
   const [videoCurrentTime, setVideoCurrentTime] = useState<number>(0);
   const [videoDuration, setVideoDuration] = useState<number>(0);
@@ -58,6 +138,17 @@ export const FileViewer: React.FC<FileViewerProps> = ({ item, className = '', on
   const [isVideoMuted, setIsVideoMuted] = useState<boolean>(false);
   const [videoSpeed, setVideoSpeed] = useState<number>(1);
   const [videoError, setVideoError] = useState<boolean>(false);
+
+  // Subtitle (.srt / .vtt) state
+  const [subtitlesEnabled, setSubtitlesEnabled] = useState<boolean>(true);
+  const [subtitleTrackName, setSubtitleTrackName] = useState<string | null>(null);
+  const [subtitleVttUrl, setSubtitleVttUrl] = useState<string | null>(null);
+  const [subtitleCues, setSubtitleCues] = useState<SubtitleCue[]>([]);
+
+  // Playlist & Continuous Streaming state
+  const [autoPlayNext, setAutoPlayNext] = useState<boolean>(true);
+  const [loopMedia, setLoopMedia] = useState<boolean>(false);
+  const [showPlaylistDrawer, setShowPlaylistDrawer] = useState<boolean>(true);
 
   // Audio state
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -77,6 +168,67 @@ export const FileViewer: React.FC<FileViewerProps> = ({ item, className = '', on
     return item.name.split('.').pop()?.toLowerCase() || '';
   }, [item.name]);
 
+  // Build folder media playlist (all video items for video, or all audio items for audio)
+  const mediaPlaylist = useMemo(() => {
+    if (item.fileType !== 'video' && item.fileType !== 'audio') return [];
+    const list = siblingItems.filter(
+      (i) => !i.deleted && !i.isFolder && i.fileType === item.fileType
+    );
+    if (!list.some((i) => i.id === item.id)) {
+      return [item, ...list];
+    }
+    return list;
+  }, [siblingItems, item]);
+
+  const currentPlaylistIndex = useMemo(
+    () => mediaPlaylist.findIndex((i) => i.id === item.id),
+    [mediaPlaylist, item.id]
+  );
+
+  const handlePlayPreviousTrack = () => {
+    if (!onSelectItem || mediaPlaylist.length <= 1) return;
+    const prevIdx =
+      (currentPlaylistIndex - 1 + mediaPlaylist.length) % mediaPlaylist.length;
+    onSelectItem(mediaPlaylist[prevIdx]);
+  };
+
+  const handlePlayNextTrack = () => {
+    if (!onSelectItem || mediaPlaylist.length <= 1) return;
+    const nextIdx = (currentPlaylistIndex + 1) % mediaPlaylist.length;
+    onSelectItem(mediaPlaylist[nextIdx]);
+  };
+
+  // Discover .srt / .vtt subtitle files in the same folder/drive
+  const availableDriveSubtitles = useMemo(() => {
+    return siblingItems.filter(
+      (i) =>
+        !i.deleted &&
+        !i.isFolder &&
+        (i.name.toLowerCase().endsWith('.srt') || i.name.toLowerCase().endsWith('.vtt'))
+    );
+  }, [siblingItems]);
+
+  const loadSubtitleText = (rawText: string, label: string) => {
+    const cues = parseSubtitleCues(rawText);
+    const vttText = convertSrtToWebVtt(rawText);
+    const blob = new Blob([vttText], { type: 'text/vtt' });
+    const url = URL.createObjectURL(blob);
+    setSubtitleCues(cues);
+    setSubtitleVttUrl(url);
+    setSubtitleTrackName(label);
+    setSubtitlesEnabled(true);
+  };
+
+  const handleLocalSubtitleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      loadSubtitleText(text, file.name);
+    } catch {}
+    e.target.value = '';
+  };
+
   // Determine media URLs
   const mediaSrc = useMemo(() => {
     if (item.downloadUrl) return item.downloadUrl;
@@ -86,7 +238,7 @@ export const FileViewer: React.FC<FileViewerProps> = ({ item, className = '', on
     return `/api/public/download/${encodeURIComponent(item.id)}`;
   }, [item]);
 
-  // Reset transforms when item changes
+  // Reset transforms and auto-load matching folder subtitle when item changes
   useEffect(() => {
     setZoom(1);
     setRotation(0);
@@ -96,7 +248,30 @@ export const FileViewer: React.FC<FileViewerProps> = ({ item, className = '', on
     setTextSearch('');
     setIsVideoPlaying(false);
     setIsAudioPlaying(false);
+
+    // Check if there is a matching .srt or .vtt in siblingItems
+    const baseStem = item.name.replace(/\.[^.]+$/, '').toLowerCase();
+    const matchedSub = availableDriveSubtitles.find((s) =>
+      s.name.toLowerCase().startsWith(baseStem)
+    );
+    if (matchedSub && matchedSub.content) {
+      loadSubtitleText(matchedSub.content, matchedSub.name);
+    } else {
+      setSubtitleCues([]);
+      setSubtitleVttUrl(null);
+      setSubtitleTrackName(null);
+    }
   }, [item.id]);
+
+  // Active subtitle cue at current video playback timestamp
+  const activeSubtitleCue = useMemo(() => {
+    if (!subtitlesEnabled || subtitleCues.length === 0) return null;
+    return (
+      subtitleCues.find(
+        (c) => videoCurrentTime >= c.start && videoCurrentTime <= c.end
+      ) || null
+    );
+  }, [subtitlesEnabled, subtitleCues, videoCurrentTime]);
 
   // Format time (seconds -> mm:ss)
   const formatTime = (seconds: number) => {
@@ -319,21 +494,46 @@ export const FileViewer: React.FC<FileViewerProps> = ({ item, className = '', on
       }
     };
 
+    const togglePictureInPicture = () => {
+      if (!videoRef.current) return;
+      if (document.pictureInPictureElement) {
+        document.exitPictureInPicture().catch(() => {});
+      } else if (videoRef.current.requestPictureInPicture) {
+        videoRef.current.requestPictureInPicture().catch(() => {});
+      }
+    };
+
     return (
       <div className="flex flex-col bg-slate-950 rounded-2xl border border-slate-800 overflow-hidden shadow-2xl">
+        {/* Hidden local .srt / .vtt file input */}
+        <input
+          ref={subtitleInputRef}
+          type="file"
+          accept=".srt,.vtt,text/vtt,application/x-subrip"
+          onChange={handleLocalSubtitleUpload}
+          className="hidden"
+        />
+
         {/* Video Canvas Container */}
         <div className="relative bg-black flex items-center justify-center max-h-[55vh] min-h-[300px]">
           <video
             ref={videoRef}
             src={videoUrl}
+            loop={loopMedia}
             playsInline
+            crossOrigin="anonymous"
             className="w-full max-h-[55vh] object-contain cursor-pointer"
             onClick={togglePlay}
             onError={(e) => {
               e.preventDefault();
               setVideoError(true);
             }}
-            onCanPlay={() => setVideoError(false)}
+            onCanPlay={() => {
+              setVideoError(false);
+              if (videoRef.current) {
+                videoRef.current.playbackRate = videoSpeed;
+              }
+            }}
             onTimeUpdate={() => {
               if (videoRef.current) {
                 setVideoCurrentTime(videoRef.current.currentTime);
@@ -342,10 +542,35 @@ export const FileViewer: React.FC<FileViewerProps> = ({ item, className = '', on
             onLoadedMetadata={() => {
               if (videoRef.current) {
                 setVideoDuration(videoRef.current.duration);
+                videoRef.current.playbackRate = videoSpeed;
               }
             }}
-            onEnded={() => setIsVideoPlaying(false)}
-          />
+            onEnded={() => {
+              setIsVideoPlaying(false);
+              if (autoPlayNext && mediaPlaylist.length > 1) {
+                handlePlayNextTrack();
+              }
+            }}
+          >
+            {subtitleVttUrl && subtitlesEnabled && (
+              <track
+                kind="subtitles"
+                src={subtitleVttUrl}
+                srcLang="en"
+                label={subtitleTrackName || 'Subtitles'}
+                default
+              />
+            )}
+          </video>
+
+          {/* Live High-Contrast Subtitle Cue Overlay (.srt / .vtt) */}
+          {activeSubtitleCue && (
+            <div className="absolute bottom-6 inset-x-6 flex justify-center pointer-events-none z-10">
+              <div className="px-4 py-1.5 rounded-xl bg-black/85 border border-white/10 text-white text-sm font-medium text-center shadow-2xl max-w-2xl whitespace-pre-line">
+                {activeSubtitleCue.text}
+              </div>
+            </div>
+          )}
 
           {/* Centered big play button overlay when paused */}
           {!isVideoPlaying && (
@@ -361,10 +586,10 @@ export const FileViewer: React.FC<FileViewerProps> = ({ item, className = '', on
         </div>
 
         {/* Custom Video Control Bar */}
-        <div className="p-3 bg-slate-900 border-t border-slate-800 space-y-2">
+        <div className="p-3 bg-slate-900 border-t border-slate-800 space-y-2.5">
           {/* Progress Timeline Scrubber */}
           <div className="flex items-center gap-2">
-            <span className="text-[11px] font-mono text-slate-400 w-10 text-right">
+            <span className="text-[11px] font-mono tabular-nums text-slate-400 w-10 text-right">
               {formatTime(videoCurrentTime)}
             </span>
             <input
@@ -376,22 +601,44 @@ export const FileViewer: React.FC<FileViewerProps> = ({ item, className = '', on
               onChange={handleSeek}
               className="flex-1 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-sky-500 hover:accent-sky-400"
             />
-            <span className="text-[11px] font-mono text-slate-400 w-10">
+            <span className="text-[11px] font-mono tabular-nums text-slate-400 w-10">
               {formatTime(videoDuration)}
             </span>
           </div>
 
           {/* Buttons & Tools */}
-          <div className="flex items-center justify-between text-xs pt-1">
-            <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs pt-1">
+            <div className="flex items-center gap-1.5">
+              {mediaPlaylist.length > 1 && (
+                <button
+                  type="button"
+                  onClick={handlePlayPreviousTrack}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+                  title="Previous video in folder playlist"
+                >
+                  <SkipBack className="w-3.5 h-3.5" />
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={togglePlay}
-                className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors"
+                className="p-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white transition-colors"
                 title={isVideoPlaying ? 'Pause' : 'Play'}
               >
                 {isVideoPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
               </button>
+
+              {mediaPlaylist.length > 1 && (
+                <button
+                  type="button"
+                  onClick={handlePlayNextTrack}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+                  title="Next video in folder playlist"
+                >
+                  <SkipForward className="w-3.5 h-3.5" />
+                </button>
+              )}
 
               <button
                 type="button"
@@ -416,7 +663,7 @@ export const FileViewer: React.FC<FileViewerProps> = ({ item, className = '', on
               </button>
 
               {/* Volume Slider */}
-              <div className="flex items-center gap-1.5 ml-2">
+              <div className="flex items-center gap-1.5 ml-1">
                 <button
                   type="button"
                   onClick={toggleMute}
@@ -441,24 +688,92 @@ export const FileViewer: React.FC<FileViewerProps> = ({ item, className = '', on
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {/* Subtitle (.srt / .vtt) Controls */}
+              <button
+                type="button"
+                onClick={() => subtitleInputRef.current?.click()}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-medium flex items-center gap-1 border transition-colors ${
+                  subtitleTrackName
+                    ? 'bg-sky-500/15 text-sky-300 border-sky-500/40'
+                    : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700'
+                }`}
+                title="Load custom .SRT or .VTT subtitle file"
+              >
+                <Subtitles className="w-3.5 h-3.5 text-sky-400" />
+                <span>{subtitleTrackName ? `CC: ${subtitleTrackName.slice(0, 14)}` : 'Load .SRT/.VTT'}</span>
+              </button>
+
+              {subtitleTrackName && (
+                <button
+                  type="button"
+                  onClick={() => setSubtitlesEnabled((prev) => !prev)}
+                  className={`px-2 py-1 rounded-lg text-[10px] font-mono font-bold border ${
+                    subtitlesEnabled
+                      ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                      : 'bg-slate-950 text-slate-500 border-slate-800'
+                  }`}
+                >
+                  {subtitlesEnabled ? 'CC ON' : 'CC OFF'}
+                </button>
+              )}
+
+              {/* Loop Toggle */}
+              <button
+                type="button"
+                onClick={() => setLoopMedia((prev) => !prev)}
+                className={`p-1.5 rounded-lg border transition-colors ${
+                  loopMedia
+                    ? 'bg-sky-500/15 text-sky-300 border-sky-500/40'
+                    : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
+                }`}
+                title="Loop current video"
+              >
+                <Repeat className="w-3.5 h-3.5" />
+              </button>
+
               {/* Speed Selector */}
               <select
                 value={videoSpeed}
                 onChange={(e) => handleSpeedChange(parseFloat(e.target.value))}
-                className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-[11px] font-mono text-slate-300 focus:outline-none"
+                className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-[11px] font-mono tabular-nums text-slate-300 focus:outline-none"
+                title="Playback Speed"
               >
                 <option value={0.5}>0.5x</option>
                 <option value={0.75}>0.75x</option>
                 <option value={1}>1.0x</option>
                 <option value={1.25}>1.25x</option>
                 <option value={1.5}>1.5x</option>
+                <option value={1.75}>1.75x</option>
                 <option value={2}>2.0x</option>
               </select>
 
-              <span className="text-[10px] uppercase font-bold text-slate-500 px-2 py-0.5 rounded bg-slate-950 border border-slate-800">
-                1080p FHD
-              </span>
+              {/* Playlist Drawer Toggle */}
+              {mediaPlaylist.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => setShowPlaylistDrawer((prev) => !prev)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-medium flex items-center gap-1 border transition-colors ${
+                    showPlaylistDrawer
+                      ? 'bg-indigo-500/15 text-indigo-300 border-indigo-500/40'
+                      : 'bg-slate-950 text-slate-400 border-slate-800'
+                  }`}
+                >
+                  <ListMusic className="w-3.5 h-3.5" />
+                  <span className="font-mono tabular-nums">
+                    {currentPlaylistIndex + 1}/{mediaPlaylist.length}
+                  </span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={togglePictureInPicture}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+                title="Picture-in-Picture"
+              >
+                <PictureInPicture2 className="w-3.5 h-3.5" />
+              </button>
 
               <button
                 type="button"
@@ -471,6 +786,57 @@ export const FileViewer: React.FC<FileViewerProps> = ({ item, className = '', on
             </div>
           </div>
         </div>
+
+        {/* Continuous Folder Streaming Playlist Queue */}
+        {mediaPlaylist.length > 1 && showPlaylistDrawer && (
+          <div className="bg-slate-950 border-t border-slate-800 p-3 space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <div className="flex items-center gap-2">
+                <ListMusic className="w-3.5 h-3.5 text-sky-400" />
+                <span className="font-bold text-slate-200">
+                  Folder Streaming Playlist ({mediaPlaylist.length} videos)
+                </span>
+              </div>
+              <label className="flex items-center gap-1.5 text-[11px] text-slate-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={autoPlayNext}
+                  onChange={(e) => setAutoPlayNext(e.target.checked)}
+                  className="w-3.5 h-3.5 accent-sky-500 rounded"
+                />
+                <span>Auto-Play Next</span>
+              </label>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-36 overflow-y-auto pr-1">
+              {mediaPlaylist.map((track, idx) => {
+                const isCurrent = track.id === item.id;
+                return (
+                  <button
+                    key={track.id}
+                    type="button"
+                    onClick={() => onSelectItem && onSelectItem(track)}
+                    className={`px-3 py-2 rounded-xl text-left flex items-center justify-between gap-2 text-xs border transition-all ${
+                      isCurrent
+                        ? 'bg-sky-500/15 border-sky-500/40 text-sky-200 font-semibold'
+                        : 'bg-slate-900/70 border-slate-800/80 text-slate-300 hover:bg-slate-900'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="font-mono text-[10px] text-slate-500 tabular-nums">
+                        {(idx + 1).toString().padStart(2, '0')}
+                      </span>
+                      <span className="truncate">{track.name}</span>
+                    </div>
+                    <span className="font-mono text-[10px] text-slate-400 tabular-nums shrink-0">
+                      {formatBytes(track.size)}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -581,7 +947,12 @@ export const FileViewer: React.FC<FileViewerProps> = ({ item, className = '', on
               setAudioDuration(audioRef.current.duration);
             }
           }}
-          onEnded={() => setIsAudioPlaying(false)}
+          onEnded={() => {
+            setIsAudioPlaying(false);
+            if (autoPlayNext && mediaPlaylist.length > 1) {
+              handlePlayNextTrack();
+            }
+          }}
         />
 
         {/* Studio Track Visualizer Header */}
@@ -629,7 +1000,7 @@ export const FileViewer: React.FC<FileViewerProps> = ({ item, className = '', on
             onChange={handleSeek}
             className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-violet-500 hover:accent-violet-400"
           />
-          <div className="flex items-center justify-between text-xs font-mono text-slate-400 px-1">
+          <div className="flex items-center justify-between text-xs font-mono tabular-nums text-slate-400 px-1">
             <span>{formatTime(audioCurrentTime)}</span>
             <span>{formatTime(audioDuration)}</span>
           </div>
@@ -638,6 +1009,17 @@ export const FileViewer: React.FC<FileViewerProps> = ({ item, className = '', on
         {/* Playback Controls Bar */}
         <div className="flex flex-wrap items-center justify-between gap-4 pt-2 border-t border-slate-900">
           <div className="flex items-center gap-2">
+            {mediaPlaylist.length > 1 && (
+              <button
+                type="button"
+                onClick={handlePlayPreviousTrack}
+                className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-900"
+                title="Previous audio track in folder"
+              >
+                <SkipBack className="w-4 h-4" />
+              </button>
+            )}
+
             <button
               type="button"
               onClick={() => {
@@ -668,9 +1050,20 @@ export const FileViewer: React.FC<FileViewerProps> = ({ item, className = '', on
             >
               <FastForward className="w-4 h-4" />
             </button>
+
+            {mediaPlaylist.length > 1 && (
+              <button
+                type="button"
+                onClick={handlePlayNextTrack}
+                className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-900"
+                title="Next audio track in folder"
+              >
+                <SkipForward className="w-4 h-4" />
+              </button>
+            )}
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
             {/* Volume */}
             <div className="flex items-center gap-2">
               <button
@@ -700,16 +1093,60 @@ export const FileViewer: React.FC<FileViewerProps> = ({ item, className = '', on
             <select
               value={audioSpeed}
               onChange={(e) => handleSpeedChange(parseFloat(e.target.value))}
-              className="bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1 text-xs font-mono text-slate-300 focus:outline-none"
+              className="bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1 text-xs font-mono tabular-nums text-slate-300 focus:outline-none"
             >
+              <option value={0.5}>0.5x</option>
               <option value={0.75}>0.75x</option>
               <option value={1}>1.0x</option>
               <option value={1.25}>1.25x</option>
               <option value={1.5}>1.5x</option>
+              <option value={1.75}>1.75x</option>
               <option value={2}>2.0x</option>
             </select>
           </div>
         </div>
+
+        {/* Continuous Audio Folder Playlist */}
+        {mediaPlaylist.length > 1 && (
+          <div className="pt-3 border-t border-slate-900 space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-semibold text-slate-300 flex items-center gap-1.5">
+                <ListMusic className="w-3.5 h-3.5 text-violet-400" />
+                Folder Audio Playlist ({mediaPlaylist.length} tracks)
+              </span>
+              <label className="flex items-center gap-1.5 text-[11px] text-slate-400 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={autoPlayNext}
+                  onChange={(e) => setAutoPlayNext(e.target.checked)}
+                  className="w-3.5 h-3.5 accent-violet-500 rounded"
+                />
+                <span>Continuous Play</span>
+              </label>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-36 overflow-y-auto">
+              {mediaPlaylist.map((track, idx) => (
+                <button
+                  key={track.id}
+                  type="button"
+                  onClick={() => onSelectItem && onSelectItem(track)}
+                  className={`px-3 py-2 rounded-xl text-left flex items-center justify-between gap-2 text-xs border transition-all ${
+                    track.id === item.id
+                      ? 'bg-violet-500/15 border-violet-500/40 text-violet-200 font-semibold'
+                      : 'bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-800'
+                  }`}
+                >
+                  <span className="truncate">
+                    {idx + 1}. {track.name}
+                  </span>
+                  <span className="font-mono text-[10px] text-slate-400 tabular-nums shrink-0">
+                    {formatBytes(track.size)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     );
   };

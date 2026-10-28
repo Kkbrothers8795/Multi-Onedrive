@@ -10,43 +10,75 @@ export class MicrosoftGraphService {
   private static refreshPromises = new Map<string, Promise<string | null>>();
 
   /**
+   * Extracts Azure AD appid (client_id), tid (tenant_id), and exp from a JWT access token
+   * Works even if the access token is already expired!
+   */
+  static extractJwtClaims(token?: string): {
+    appId?: string;
+    tenantId?: string;
+    expMs?: number;
+  } {
+    if (!token || typeof token !== 'string') return {};
+    const parts = token.split('.');
+    if (parts.length !== 3) return {};
+    try {
+      const base64Url = parts[1];
+      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), '=');
+      const payload = JSON.parse(atob(padded));
+      return {
+        appId: payload.appid || payload.azp || undefined,
+        tenantId: payload.tid || undefined,
+        expMs: typeof payload.exp === 'number' ? payload.exp * 1000 : undefined,
+      };
+    } catch {
+      return {};
+    }
+  }
+
+  /**
+   * Sanitizes a filename so OneDrive Graph API never rejects it due to reserved characters
+   */
+  static sanitizeOneDriveFileName(rawName: string): string {
+    const cleaned = (rawName || 'uploaded-file')
+      .replace(/["*:<>?/\\|]/g, '_')
+      .trim()
+      .replace(/^\.+|\.+$/g, '');
+    return cleaned || `file-${Date.now()}`;
+  }
+
+  /**
    * Checks whether an account's access token is expired or within 10 minutes of expiring
    */
   static isTokenExpiredOrExpiring(account?: DriveAccount): boolean {
     if (!account) return false;
     const bufferMs = 10 * 60 * 1000; // 10 minutes proactive buffer
 
+    const token = account.accessToken || (account as any).access_token;
+    const claims = this.extractJwtClaims(token);
+    if (claims.appId && !account.clientId) {
+      account.clientId = claims.appId;
+    }
+    if (claims.tenantId && (!account.tenantId || account.tenantId === 'common')) {
+      account.tenantId = claims.tenantId;
+    }
+    if (claims.expMs) {
+      account.expiresAt = claims.expMs;
+      if (Date.now() >= claims.expMs - bufferMs) {
+        return true;
+      }
+      return false;
+    }
+
     if (account.expiresAt && typeof account.expiresAt === 'number') {
       if (Date.now() >= account.expiresAt - bufferMs) {
         return true;
       }
-    }
-
-    // Also inspect JWT exp claim if accessToken is a standard JWT
-    if (account.accessToken && account.accessToken.split('.').length === 3) {
-      try {
-        const base64Url = account.accessToken.split('.')[1];
-        const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-        const payload = JSON.parse(atob(base64));
-        if (payload.exp && typeof payload.exp === 'number') {
-          const expMs = payload.exp * 1000;
-          account.expiresAt = expMs;
-          if (Date.now() >= expMs - bufferMs) {
-            return true;
-          }
-          return false;
-        }
-      } catch {
-        // Opaque/compact token (e.g. EwB...), rely on expiresAt
-      }
+      return false;
     }
 
     // If expiresAt is unknown, refresh proactively once
-    if (!account.expiresAt) {
-      return true;
-    }
-
-    return false;
+    return true;
   }
 
   /**
@@ -71,15 +103,22 @@ export class MicrosoftGraphService {
         savedTenantId = localStorage.getItem('multidrive_oauth_tenant_id') || '';
       } catch {}
 
+      const jwtClaims = this.extractJwtClaims(account.accessToken || (account as any).access_token);
+
       const clientId =
         account.clientId ||
         (account as any).client_id ||
+        jwtClaims.appId ||
         savedClientId ||
         'c7e8e527-3932-4467-8451-b06bd9e013bf';
       const clientSecret =
         account.clientSecret || (account as any).client_secret || savedClientSecret || undefined;
       const tenant =
-        account.tenantId || (account as any).tenant_id || savedTenantId || 'common';
+        account.tenantId ||
+        (account as any).tenant_id ||
+        jwtClaims.tenantId ||
+        savedTenantId ||
+        'common';
 
       // 1. Primary Refresh via Backend Server (supports Web Confidential Client with client_secret & server env vars)
       try {
@@ -89,6 +128,7 @@ export class MicrosoftGraphService {
           body: JSON.stringify({
             accountId: account.id,
             refreshToken,
+            accessToken: account.accessToken || (account as any).access_token,
             clientId,
             clientSecret,
             tenant,
@@ -100,6 +140,7 @@ export class MicrosoftGraphService {
             account.accessToken = data.accessToken;
             if (data.refreshToken) account.refreshToken = data.refreshToken;
             account.expiresAt = data.expiresAt || Date.now() + (data.expiresIn || 3600) * 1000;
+            account.clientId = clientId;
             account.syncStatus = 'synced';
             account.needsReauth = false;
             account.authError = undefined;
@@ -504,117 +545,204 @@ export class MicrosoftGraphService {
   }
 
   /**
+   * Helper to perform an XMLHttpRequest upload with byte-level upload.onprogress telemetry
+   */
+  private static xhrUpload(
+    url: string,
+    method: 'PUT' | 'POST',
+    headers: Record<string, string>,
+    body: Document | XMLHttpRequestBodyInit | null,
+    onByteProgress?: (loaded: number, total: number) => void
+  ): Promise<{ ok: boolean; status: number; data: any }> {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open(method, url, true);
+      for (const [k, v] of Object.entries(headers)) {
+        xhr.setRequestHeader(k, v);
+      }
+
+      if (xhr.upload && onByteProgress) {
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) {
+            onByteProgress(event.loaded, event.total);
+          }
+        };
+      }
+
+      xhr.onload = () => {
+        let parsed: any = null;
+        try {
+          parsed = JSON.parse(xhr.responseText);
+        } catch {
+          parsed = null;
+        }
+        resolve({
+          ok: xhr.status >= 200 && xhr.status < 300,
+          status: xhr.status,
+          data: parsed,
+        });
+      };
+
+      xhr.onerror = () => reject(new Error('Network error during upload'));
+      xhr.send(body);
+    });
+  }
+
+  /**
    * Upload file directly to OneDrive with proactive background token refresh,
-   * resumable upload session support for large files (> 4MB), and server proxy fallback.
+   * real-time byte progress telemetry, resumable upload session support for large files (> 4MB),
+   * automatic root fallback when folder belongs to another drive, and server proxy fallback.
    */
   static async uploadFile(
     accessToken: string,
     account: DriveAccount,
     parentFolderId: string | null,
-    file: File
+    file: File,
+    onProgress?: (loadedBytes: number, totalBytes: number) => void
   ): Promise<DriveItem> {
+    const totalSize = Math.max(1, file.size);
+    onProgress?.(0, totalSize);
+
+    const safeFileName = this.sanitizeOneDriveFileName(file.name);
+
     // 1. Proactively ensure the access token is refreshed BEFORE starting the upload
-    let activeToken = await this.ensureValidToken(account, accessToken);
+    let activeToken = await this.ensureValidToken(account, accessToken || account.accessToken || (account as any).access_token || '');
 
     const isRootOrLocalFolder =
-      !parentFolderId || parentFolderId === 'root' || parentFolderId.startsWith('fold-');
+      !parentFolderId ||
+      parentFolderId === 'root' ||
+      parentFolderId.startsWith('fold-') ||
+      parentFolderId.startsWith('upload-') ||
+      parentFolderId.startsWith('copy-');
 
-    const parentPath = isRootOrLocalFolder
-      ? `/me/drive/root:/${encodeURIComponent(file.name)}`
-      : `/me/drive/items/${parentFolderId}:/${encodeURIComponent(file.name)}`;
+    const rootPath = `/me/drive/root:/${encodeURIComponent(safeFileName)}`;
+    const targetPath = isRootOrLocalFolder
+      ? rootPath
+      : `/me/drive/items/${parentFolderId}:/${encodeURIComponent(safeFileName)}`;
 
-    // 2. For files > 4 MB, use Microsoft Graph Resumable Upload Session directly to OneDrive
+    // 2. For files > 4 MB, try Microsoft Graph Resumable Upload Session directly to OneDrive
     const FOUR_MB = 4 * 1024 * 1024;
     if (file.size > FOUR_MB) {
-      const sessionData = await this.request(`${parentPath}:/createUploadSession`, activeToken, {
-        method: 'POST',
-        body: {
-          item: {
-            '@microsoft.graph.conflictBehavior': 'rename',
-            name: file.name,
+      try {
+        let sessionData: any = null;
+        try {
+          sessionData = await this.request(`${targetPath}:/createUploadSession`, activeToken, {
+            method: 'POST',
+            body: {
+              item: {
+                '@microsoft.graph.conflictBehavior': 'rename',
+                name: safeFileName,
+              },
+            },
+            account,
+          });
+        } catch {
+          if (targetPath !== rootPath) {
+            sessionData = await this.request(`${rootPath}:/createUploadSession`, activeToken, {
+              method: 'POST',
+              body: {
+                item: {
+                  '@microsoft.graph.conflictBehavior': 'rename',
+                  name: safeFileName,
+                },
+              },
+              account,
+            });
+          }
+        }
+
+        if (sessionData?.uploadUrl) {
+          const chunkSize = 327680 * 10; // ~3.2 MB chunks (multiple of 320 KiB as required by OneDrive)
+          let offset = 0;
+          let finalItem: any = null;
+
+          while (offset < file.size) {
+            const chunkEnd = Math.min(offset + chunkSize, file.size);
+            const chunkBlob = file.slice(offset, chunkEnd);
+            const currentOffset = offset;
+
+            const chunkRes = await this.xhrUpload(
+              sessionData.uploadUrl,
+              'PUT',
+              {
+                'Content-Range': `bytes ${offset}-${chunkEnd - 1}/${file.size}`,
+              },
+              chunkBlob,
+              (loaded) => {
+                onProgress?.(Math.min(file.size, currentOffset + loaded), totalSize);
+              }
+            );
+
+            if (!chunkRes.ok && chunkRes.status !== 202) {
+              throw new Error(`OneDrive chunk upload failed with status ${chunkRes.status}`);
+            }
+
+            if (chunkRes.status === 200 || chunkRes.status === 201) {
+              finalItem = chunkRes.data;
+            }
+
+            offset = chunkEnd;
+            onProgress?.(offset, totalSize);
+          }
+
+          if (finalItem) {
+            onProgress?.(totalSize, totalSize);
+            return this.mapGraphItem(finalItem, account);
+          }
+        }
+      } catch (sessionErr) {
+        console.warn('Browser chunked session fallback to server upload proxy:', sessionErr);
+      }
+    }
+
+    // 3. Direct PUT upload to OneDrive for files <= 4 MB with XMLHttpRequest progress
+    if (file.size <= FOUR_MB && activeToken) {
+      const executeDirectPut = async (pathToUse: string, tokenToUse: string) => {
+        const directUploadUrl = `https://graph.microsoft.com/v1.0${pathToUse}:/content?@microsoft.graph.conflictBehavior=rename`;
+        return this.xhrUpload(
+          directUploadUrl,
+          'PUT',
+          {
+            Authorization: `Bearer ${tokenToUse}`,
+            'Content-Type': file.type || 'application/octet-stream',
           },
-        },
-        account,
-      });
-
-      if (sessionData?.uploadUrl) {
-        const chunkSize = 327680 * 10; // ~3.2 MB chunks (multiple of 320 KiB as required by OneDrive)
-        let offset = 0;
-        let finalItem: any = null;
-
-        while (offset < file.size) {
-          const chunkEnd = Math.min(offset + chunkSize, file.size);
-          const chunkBlob = file.slice(offset, chunkEnd);
-          const chunkBuffer = await chunkBlob.arrayBuffer();
-
-          const chunkRes = await fetch(sessionData.uploadUrl, {
-            method: 'PUT',
-            headers: {
-              'Content-Length': `${chunkEnd - offset}`,
-              'Content-Range': `bytes ${offset}-${chunkEnd - 1}/${file.size}`,
-            },
-            body: chunkBuffer,
-          });
-
-          if (!chunkRes.ok && chunkRes.status !== 202) {
-            throw new Error(`OneDrive chunk upload failed with status ${chunkRes.status}`);
+          file,
+          (loaded) => {
+            onProgress?.(Math.min(totalSize, loaded), totalSize);
           }
+        );
+      };
 
-          if (chunkRes.status === 200 || chunkRes.status === 201) {
-            finalItem = await chunkRes.json();
+      try {
+        let res = await executeDirectPut(targetPath, activeToken);
+
+        // If 401 occurs, refresh token immediately and retry direct PUT to OneDrive
+        if (res.status === 401) {
+          const freshToken = await this.refreshAccountToken(account);
+          if (freshToken) {
+            activeToken = freshToken;
+            res = await executeDirectPut(targetPath, activeToken);
           }
-
-          offset = chunkEnd;
         }
 
-        if (finalItem) {
-          return this.mapGraphItem(finalItem, account);
+        // If 404 or 400 occurs on subfolder (e.g. folder belongs to another drive during load balancing), retry at root
+        if ((res.status === 404 || res.status === 400) && targetPath !== rootPath) {
+          res = await executeDirectPut(rootPath, activeToken);
         }
+
+        if (res.ok && res.data && res.data.id) {
+          onProgress?.(totalSize, totalSize);
+          account.syncStatus = 'synced';
+          account.needsReauth = false;
+          account.authError = undefined;
+          return this.mapGraphItem(res.data, account);
+        }
+      } catch {
+        // Fall through to server-proxied OneDrive upload
       }
     }
 
-    // 3. Direct PUT upload to OneDrive for files <= 4 MB
-    const fileBuffer = await file.arrayBuffer();
-    const directUploadUrl = `https://graph.microsoft.com/v1.0${parentPath}:/content`;
-
-    try {
-      let res = await fetch(directUploadUrl, {
-        method: 'PUT',
-        headers: {
-          Authorization: `Bearer ${activeToken}`,
-          'Content-Type': file.type || 'application/octet-stream',
-        },
-        body: fileBuffer,
-      });
-
-      // If 401 occurs, refresh token immediately and retry direct PUT to OneDrive
-      if (res.status === 401) {
-        const freshToken = await this.refreshAccountToken(account);
-        if (freshToken) {
-          activeToken = freshToken;
-          res = await fetch(directUploadUrl, {
-            method: 'PUT',
-            headers: {
-              Authorization: `Bearer ${activeToken}`,
-              'Content-Type': file.type || 'application/octet-stream',
-            },
-            body: fileBuffer,
-          });
-        }
-      }
-
-      if (res.ok) {
-        const item = await res.json();
-        account.syncStatus = 'synced';
-        account.needsReauth = false;
-        account.authError = undefined;
-        return this.mapGraphItem(item, account);
-      }
-    } catch {
-      // Fall through to server-proxied OneDrive upload
-    }
-
-    // 4. Fallback: Upload via Server Proxy (handles server-side client_secret token refresh automatically)
+    // 4. Server Proxy Upload (handles confidential client token refresh, resumable sessions, and root fallback)
     const base64Content = await new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
       reader.onloadend = () => resolve(reader.result as string);
@@ -631,25 +759,44 @@ export class MicrosoftGraphService {
       savedTenantId = localStorage.getItem('multidrive_oauth_tenant_id') || '';
     } catch {}
 
-    const proxyUploadRes = await fetch('/api/graph/upload', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        fileName: file.name,
-        parentFolderId,
-        mimeType: file.type || 'application/octet-stream',
-        base64Content,
-        accessToken: activeToken,
-        accountId: account.id,
-        refreshToken: account.refreshToken || (account as any).refresh_token,
-        clientId: account.clientId || (account as any).client_id || savedClientId || undefined,
-        clientSecret:
-          account.clientSecret || (account as any).client_secret || savedClientSecret || undefined,
-        tenant: account.tenantId || (account as any).tenant_id || savedTenantId || 'common',
-      }),
+    const jwtClaims = this.extractJwtClaims(activeToken || account.accessToken || (account as any).access_token);
+
+    const payloadStr = JSON.stringify({
+      fileName: safeFileName,
+      parentFolderId: isRootOrLocalFolder ? null : parentFolderId,
+      mimeType: file.type || 'application/octet-stream',
+      base64Content,
+      accessToken: activeToken || account.accessToken || (account as any).access_token,
+      accountId: account.id,
+      refreshToken: account.refreshToken || (account as any).refresh_token,
+      clientId:
+        account.clientId ||
+        (account as any).client_id ||
+        jwtClaims.appId ||
+        savedClientId ||
+        undefined,
+      clientSecret:
+        account.clientSecret || (account as any).client_secret || savedClientSecret || undefined,
+      tenant:
+        account.tenantId ||
+        (account as any).tenant_id ||
+        jwtClaims.tenantId ||
+        savedTenantId ||
+        'common',
     });
 
-    const proxyData = await proxyUploadRes.json().catch(() => null);
+    const proxyRes = await this.xhrUpload(
+      '/api/graph/upload',
+      'POST',
+      { 'Content-Type': 'application/json' },
+      payloadStr,
+      (loaded, total) => {
+        const ratio = total > 0 ? loaded / total : 0;
+        onProgress?.(Math.round(ratio * totalSize), totalSize);
+      }
+    );
+
+    const proxyData = proxyRes.data;
     if (proxyData?._refreshedAuth) {
       account.accessToken = proxyData._refreshedAuth.accessToken;
       if (proxyData._refreshedAuth.refreshToken) {
@@ -664,6 +811,7 @@ export class MicrosoftGraphService {
     }
 
     if (proxyData?.success && proxyData.item) {
+      onProgress?.(totalSize, totalSize);
       return this.mapGraphItem(proxyData.item, account);
     }
 

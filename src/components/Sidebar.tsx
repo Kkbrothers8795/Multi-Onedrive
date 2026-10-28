@@ -16,6 +16,9 @@ import {
   Activity,
   Database,
   Key,
+  CopyCheck,
+  Inbox,
+  Bell,
 } from 'lucide-react';
 import { DriveAccount, NavigationFilter } from '../types/drive';
 import { formatBytes } from '../utils/driveLogic';
@@ -32,6 +35,9 @@ interface SidebarProps {
   onOpenFtpSftpModal?: () => void;
   onOpenBackupModal?: () => void;
   onOpenChangePasswordModal?: () => void;
+  onOpenDuplicateFinder?: () => void;
+  onOpenFileRequests?: () => void;
+  onOpenWebhookAlerts?: () => void;
   aggregateStorage: { total: number; used: number; remaining: number; percent: number };
 }
 
@@ -46,6 +52,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenFtpSftpModal,
   onOpenBackupModal,
   onOpenChangePasswordModal,
+  onOpenDuplicateFinder,
+  onOpenFileRequests,
+  onOpenWebhookAlerts,
   aggregateStorage,
 }) => {
   return (
@@ -146,6 +155,54 @@ export const Sidebar: React.FC<SidebarProps> = ({
             Live
           </span>
         </button>
+
+        {onOpenDuplicateFinder && (
+          <button
+            type="button"
+            onClick={onOpenDuplicateFinder}
+            className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium text-emerald-300 hover:bg-emerald-500/10 hover:text-emerald-200 transition-all border border-emerald-500/20 bg-emerald-500/5 mt-1"
+          >
+            <div className="flex items-center gap-2.5">
+              <CopyCheck className="w-4 h-4 text-emerald-400" />
+              <span>Duplicate Finder</span>
+            </div>
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-950/60 border border-emerald-800/60 text-emerald-300">
+              Clean
+            </span>
+          </button>
+        )}
+
+        {onOpenFileRequests && (
+          <button
+            type="button"
+            onClick={onOpenFileRequests}
+            className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium text-indigo-300 hover:bg-indigo-500/10 hover:text-indigo-200 transition-all border border-indigo-500/20 bg-indigo-500/5 mt-1"
+          >
+            <div className="flex items-center gap-2.5">
+              <Inbox className="w-4 h-4 text-indigo-400" />
+              <span>Dropzone Requests</span>
+            </div>
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-indigo-950/60 border border-indigo-800/60 text-indigo-300">
+              Links
+            </span>
+          </button>
+        )}
+
+        {onOpenWebhookAlerts && (
+          <button
+            type="button"
+            onClick={onOpenWebhookAlerts}
+            className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium text-sky-300 hover:bg-sky-500/10 hover:text-sky-200 transition-all border border-sky-500/20 bg-sky-500/5 mt-1"
+          >
+            <div className="flex items-center gap-2.5">
+              <Bell className="w-4 h-4 text-sky-400" />
+              <span>Telegram / Discord</span>
+            </div>
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sky-950/60 border border-sky-800/60 text-sky-300">
+              Bot
+            </span>
+          </button>
+        )}
 
         {onOpenFtpSftpModal && (
           <button

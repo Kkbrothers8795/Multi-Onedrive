@@ -22,6 +22,8 @@ import { formatBytes } from '../utils/driveLogic';
 
 interface FilePreviewModalProps {
   item: DriveItem | null;
+  siblingItems?: DriveItem[];
+  onSelectItem?: (item: DriveItem) => void;
   onClose: () => void;
   onDownload: (item: DriveItem) => void;
   onShare: (item: DriveItem) => void;
@@ -30,6 +32,8 @@ interface FilePreviewModalProps {
 
 export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
   item,
+  siblingItems,
+  onSelectItem,
   onClose,
   onDownload,
   onShare,
@@ -166,7 +170,12 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
         {/* Content Body */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 bg-slate-900/50">
           {activeTab === 'preview' ? (
-            <FileViewer item={item} onDownload={() => onDownload(item)} />
+            <FileViewer
+              item={item}
+              siblingItems={siblingItems}
+              onSelectItem={onSelectItem}
+              onDownload={() => onDownload(item)}
+            />
           ) : (
             /* Microsoft Graph Item Metadata Inspection */
             <div className="space-y-4">

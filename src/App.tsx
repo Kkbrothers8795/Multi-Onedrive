@@ -19,6 +19,7 @@ import {
   DateFilterOption,
   SizeFilterOption,
   ActivityLogEntry,
+  UploadTransferItem,
 } from './types/drive';
 import {
   filterItems,
@@ -56,6 +57,12 @@ import { CloudMigrationModal } from './components/CloudMigrationModal';
 import { AnalyticsDashboard } from './components/AnalyticsDashboard';
 import { BackupModal } from './components/BackupModal';
 import { ChangePasswordModal } from './components/ChangePasswordModal';
+import { UploadProgressModal } from './components/UploadProgressModal';
+import { DuplicateFinderModal } from './components/DuplicateFinderModal';
+import { FileRequestModal } from './components/FileRequestModal';
+import { PublicFileRequestView } from './components/PublicFileRequestView';
+import { WebhookAlertsModal } from './components/WebhookAlertsModal';
+import { VercelTelemetry } from './components/VercelTelemetry';
 import { LoginScreen } from './components/LoginScreen';
 import { PublicDownloadView } from './components/PublicDownloadView';
 import { parseDetailedError, extractErrorMessage } from './utils/formatError';
@@ -80,13 +87,39 @@ import {
   Check,
 } from 'lucide-react';
 
+function normalizeLoadedAccount(a: DriveAccount): DriveAccount {
+  const anyAcc = a as any;
+  const accessToken = a.accessToken || anyAcc.access_token || '';
+  const refreshToken = a.refreshToken || anyAcc.refresh_token || '';
+  const hasTokens = Boolean(accessToken || refreshToken);
+  const claims = MicrosoftGraphService.extractJwtClaims(accessToken);
+  return {
+    ...a,
+    isLive: Boolean(a.isLive || hasTokens),
+    accessToken: accessToken || a.accessToken,
+    refreshToken: refreshToken || a.refreshToken,
+    clientId: a.clientId || anyAcc.client_id || claims.appId || undefined,
+    tenantId: a.tenantId || anyAcc.tenant_id || claims.tenantId || undefined,
+    needsReauth: false,
+    syncStatus: 'synced',
+    authError: undefined,
+  };
+}
+
 export default function App() {
   // 1. Check for public direct download/share links (?download=FILE_ID or ?share=FILE_ID)
-  // Public downloads do NOT require login.
+  // or Public File Request Dropzone links (?request=REQ_ID)
+  // Public links do NOT require login.
   const [publicFileId, setPublicFileId] = useState<string | null>(() => {
     if (typeof window === 'undefined') return null;
     const params = new URLSearchParams(window.location.search);
     return params.get('download') || params.get('share');
+  });
+
+  const [publicRequestId, setPublicRequestId] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const params = new URLSearchParams(window.location.search);
+    return params.get('request');
   });
 
   // 2. Admin Authentication state (required to view or manage drive files)
@@ -113,13 +146,9 @@ export default function App() {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          const filtered = dismissed ? parsed.filter((a: DriveAccount) => a.isLive) : parsed;
-          return filtered.map((a: DriveAccount) => ({
-            ...a,
-            needsReauth: false,
-            syncStatus: 'synced',
-            authError: undefined,
-          }));
+          const normalized = parsed.map((a: DriveAccount) => normalizeLoadedAccount(a));
+          const filtered = dismissed ? normalized.filter((a: DriveAccount) => a.isLive) : normalized;
+          return filtered.length > 0 ? filtered : normalized;
         }
       }
       return [];
@@ -193,6 +222,13 @@ export default function App() {
   const [isMigrationModalOpen, setIsMigrationModalOpen] = useState(false);
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
+  const [isDuplicateFinderOpen, setIsDuplicateFinderOpen] = useState(false);
+  const [isFileRequestModalOpen, setIsFileRequestModalOpen] = useState(false);
+  const [isWebhookAlertsOpen, setIsWebhookAlertsOpen] = useState(false);
+  const [uploadTransfers, setUploadTransfers] = useState<UploadTransferItem[]>([]);
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [isUploadModalMinimized, setIsUploadModalMinimized] = useState(false);
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [loadBalancingEnabled, setLoadBalancingEnabled] = useState<boolean>(() => {
     try {
       const saved = localStorage.getItem('multidrive_load_balancing_enabled');
@@ -258,9 +294,9 @@ export default function App() {
     }
   }, [activityLog]);
 
-  // Verify Admin Session on mount (unless on public download link)
+  // Verify Admin Session on mount (unless on public download or file request link)
   useEffect(() => {
-    if (publicFileId) {
+    if (publicFileId || publicRequestId) {
       setIsAuthChecking(false);
       return;
     }
@@ -285,7 +321,7 @@ export default function App() {
       .finally(() => {
         setIsAuthChecking(false);
       });
-  }, [publicFileId]);
+  }, [publicFileId, publicRequestId]);
 
   // Sync with Server Storage on mount (survives browser cache clears)
   useEffect(() => {
@@ -300,12 +336,7 @@ export default function App() {
         }
 
         const sanitizeAccounts = (list: DriveAccount[]): DriveAccount[] =>
-          list.map((a) => ({
-            ...a,
-            needsReauth: false,
-            syncStatus: 'synced',
-            authError: undefined,
-          }));
+          list.map((a) => normalizeLoadedAccount(a));
 
         // Check local storage for any live accounts in case serverless cold start reset /tmp store
         let localAccounts: DriveAccount[] = [];
@@ -315,7 +346,7 @@ export default function App() {
           const savedIt = localStorage.getItem('onedrive_multidrive_items');
           if (savedAcc) {
             const parsed = JSON.parse(savedAcc);
-            if (Array.isArray(parsed)) localAccounts = parsed;
+            if (Array.isArray(parsed)) localAccounts = parsed.map((a) => normalizeLoadedAccount(a));
           }
           if (savedIt) {
             const parsedIt = JSON.parse(savedIt);
@@ -323,7 +354,8 @@ export default function App() {
           }
         } catch {}
 
-        const serverAccounts: DriveAccount[] = Array.isArray(data.accounts) ? data.accounts : [];
+        const rawServerAccounts: DriveAccount[] = Array.isArray(data.accounts) ? data.accounts : [];
+        const serverAccounts = sanitizeAccounts(rawServerAccounts);
         const serverHasLive = serverAccounts.some((a) => a.isLive);
         const localHasLive = localAccounts.some((a) => a.isLive);
 
@@ -336,7 +368,7 @@ export default function App() {
           const filteredServer = data.isDemoDismissed
             ? serverAccounts.filter((a) => a.isLive)
             : serverAccounts;
-          setAccounts(sanitizeAccounts(filteredServer.length > 0 ? filteredServer : serverAccounts));
+          setAccounts(filteredServer.length > 0 ? filteredServer : serverAccounts);
           if (Array.isArray(data.items)) {
             setItems(data.items);
           }
@@ -857,21 +889,34 @@ export default function App() {
     logActivity('restore', item.name, item.accountName, item.accountId);
   };
 
-  // File Upload Handler with Automatic Multi-Account Load Balancing
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
+  // Core File Upload Processor with Live Telemetry (Speed, Remaining Size, ETA) & Multi-Account Load Balancing
+  const processFilesUpload = async (fileList: FileList | File[]) => {
+    const files = Array.from(fileList);
+    if (files.length === 0) return;
+
+    if (accounts.length === 0) {
+      showToast('Please connect a OneDrive account first before uploading files', 'error');
+      setIsConnectModalOpen(true);
+      return;
+    }
 
     let totalUploadedBytes = 0;
     const assignedAccounts: string[] = [];
+    const batchTimestamp = Date.now();
 
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
+    // Open the Upload Manager Dialog immediately so user sees live progress, speed, remaining size & ETA
+    setIsUploadModalOpen(true);
+    setIsUploadModalMinimized(false);
+
+    // Pre-create transfer queue items for all selected files
+    const initialQueueItems: {
+      transferId: string;
+      file: File;
+      targetAccount: DriveAccount;
+      balanceTag: string;
+      category: FileCategory;
+    }[] = files.map((file, idx) => {
       const category = getFileCategory(file.name, file.type);
-      totalUploadedBytes += file.size;
-
-      // Smart Multi-Account Load Balancing:
-      // If enabled, automatically route this file to the connected OneDrive tenant with the highest available free space
       let targetAccount = currentAccount || accounts[0];
       let balanceTag = '';
 
@@ -883,6 +928,38 @@ export default function App() {
         }
       }
 
+      return {
+        transferId: `tx-${batchTimestamp}-${idx}`,
+        file,
+        targetAccount,
+        balanceTag,
+        category,
+      };
+    });
+
+    setUploadTransfers((prev) => [
+      ...initialQueueItems.map((entry) => ({
+        id: entry.transferId,
+        fileName: entry.file.name,
+        fileSize: entry.file.size,
+        uploadedBytes: 0,
+        speedBps: 0,
+        etaSeconds: 0,
+        progress: 0,
+        status: 'uploading' as const,
+        accountId: entry.targetAccount.id,
+        accountName: entry.targetAccount.name,
+        accountColor: entry.targetAccount.color,
+        fileType: entry.category,
+        startedAt: Date.now(),
+        sourceType: 'local' as const,
+      })),
+      ...prev,
+    ]);
+
+    for (let i = 0; i < initialQueueItems.length; i++) {
+      const { transferId, file, targetAccount, balanceTag, category } = initialQueueItems[i];
+      totalUploadedBytes += file.size;
       assignedAccounts.push(targetAccount.name);
 
       // Read preview data based on file type
@@ -909,20 +986,31 @@ export default function App() {
               reader.readAsDataURL(file);
             });
           }
-        } else if (file.type.startsWith('video/') || file.type.startsWith('audio/') || file.type === 'application/pdf') {
+        } else if (
+          file.type.startsWith('video/') ||
+          file.type.startsWith('audio/') ||
+          file.type === 'application/pdf'
+        ) {
           downloadUrl = URL.createObjectURL(file);
         }
       } catch {
         sampleContent = undefined;
       }
 
+      // Ensure parentFolderId actually belongs to targetAccount (important when Load Balancing routes to another drive)
+      const currentFolderObj = currentFolderId ? items.find((it) => it.id === currentFolderId) : null;
+      const effectiveParentFolderId =
+        currentFolderObj && currentFolderObj.accountId === targetAccount.id && !currentFolderId?.startsWith('fold-')
+          ? currentFolderId
+          : null;
+
       const newItem: DriveItem = {
-        id: `upload-${Date.now()}-${i}`,
+        id: `upload-${batchTimestamp}-${i}`,
         name: file.name,
         accountId: targetAccount.id,
         accountName: targetAccount.name,
         accountColor: targetAccount.color,
-        parentId: currentFolderId,
+        parentId: effectiveParentFolderId,
         isFolder: false,
         size: file.size,
         lastModifiedDateTime: new Date().toISOString(),
@@ -952,64 +1040,301 @@ export default function App() {
         )
       );
 
-      logActivity('upload', file.name, targetAccount.name, targetAccount.id, `${formatBytes(file.size)}${balanceTag}`);
+      logActivity(
+        'upload',
+        file.name,
+        targetAccount.name,
+        targetAccount.id,
+        `${formatBytes(file.size)}${balanceTag}`
+      );
 
-      // Direct upload to Microsoft OneDrive (with automatic background token refresh)
-      if (targetAccount.isLive && (targetAccount.accessToken || targetAccount.refreshToken || (targetAccount as any).refresh_token)) {
+      const uploadStartTime = Date.now();
+      const updateTransferTelemetry = (loadedBytes: number, totalBytes: number) => {
+        const clampedLoaded = Math.min(totalBytes, Math.max(0, loadedBytes));
+        const elapsedSec = Math.max(0.15, (Date.now() - uploadStartTime) / 1000);
+        const speedBps = Math.round(clampedLoaded / elapsedSec);
+        const remainingBytes = Math.max(0, totalBytes - clampedLoaded);
+        const etaSeconds = speedBps > 0 ? Math.max(0, remainingBytes / speedBps) : 0;
+        const progress = totalBytes > 0 ? Math.min(99, Math.round((clampedLoaded / totalBytes) * 100)) : 99;
+
+        setUploadTransfers((prev) =>
+          prev.map((tx) =>
+            tx.id === transferId
+              ? {
+                  ...tx,
+                  uploadedBytes: clampedLoaded,
+                  speedBps,
+                  etaSeconds,
+                  progress,
+                  status: 'uploading',
+                }
+              : tx
+          )
+        );
+      };
+
+      const isLiveAccount = Boolean(
+        targetAccount.isLive ||
+          targetAccount.accessToken ||
+          targetAccount.refreshToken ||
+          (targetAccount as any).access_token ||
+          (targetAccount as any).refresh_token
+      );
+
+      // Direct upload to Microsoft OneDrive (with automatic background token refresh & real-time XHR byte progress)
+      if (isLiveAccount) {
         const tempId = newItem.id;
-        MicrosoftGraphService.uploadFile(
-          targetAccount.accessToken || '',
-          targetAccount,
-          currentFolderId,
-          file
-        )
-          .then((uploadedDriveItem) => {
-            // Replace optimistic item with real OneDrive DriveItem metadata and ID
-            setItems((prev) =>
-              prev.map((it) =>
-                it.id === tempId
-                  ? {
-                      ...it,
-                      ...uploadedDriveItem,
-                      content: sampleContent || uploadedDriveItem.content,
-                      downloadUrl: uploadedDriveItem.downloadUrl || downloadUrl,
-                    }
-                  : it
-              )
-            );
-            // Persist any refreshed accessToken / refreshToken back to accounts state
-            setAccounts((prev) =>
-              prev.map((acc) =>
-                acc.id === targetAccount.id
-                  ? {
-                      ...acc,
-                      accessToken: targetAccount.accessToken || acc.accessToken,
-                      refreshToken: targetAccount.refreshToken || acc.refreshToken,
-                      expiresAt: targetAccount.expiresAt || acc.expiresAt,
-                      syncStatus: 'synced',
-                      needsReauth: false,
-                      authError: undefined,
-                    }
-                  : acc
-              )
-            );
-          })
-          .catch((err) => {
-            const rawErr = extractErrorMessage(err);
-            console.warn('OneDrive direct upload notice:', rawErr);
-          });
+        try {
+          const uploadedDriveItem = await MicrosoftGraphService.uploadFile(
+            targetAccount.accessToken || (targetAccount as any).access_token || '',
+            targetAccount,
+            effectiveParentFolderId,
+            file,
+            (loaded, total) => {
+              updateTransferTelemetry(loaded, total);
+            }
+          );
+
+          // Replace optimistic item with real OneDrive DriveItem metadata and ID
+          setItems((prev) =>
+            prev.map((it) =>
+              it.id === tempId
+                ? {
+                    ...it,
+                    ...uploadedDriveItem,
+                    parentId: effectiveParentFolderId,
+                    content: sampleContent || uploadedDriveItem.content,
+                    downloadUrl: uploadedDriveItem.downloadUrl || downloadUrl,
+                  }
+                : it
+            )
+          );
+
+          // Persist any refreshed accessToken / refreshToken back to accounts state
+          setAccounts((prev) =>
+            prev.map((acc) =>
+              acc.id === targetAccount.id
+                ? {
+                    ...acc,
+                    isLive: true,
+                    accessToken: targetAccount.accessToken || acc.accessToken,
+                    refreshToken: targetAccount.refreshToken || acc.refreshToken,
+                    expiresAt: targetAccount.expiresAt || acc.expiresAt,
+                    clientId: targetAccount.clientId || acc.clientId,
+                    tenantId: targetAccount.tenantId || acc.tenantId,
+                    syncStatus: 'synced',
+                    needsReauth: false,
+                    authError: undefined,
+                  }
+                : acc
+            )
+          );
+
+          const finalElapsedSec = Math.max(0.2, (Date.now() - uploadStartTime) / 1000);
+          const finalSpeed = Math.round(file.size / finalElapsedSec);
+          setUploadTransfers((prev) =>
+            prev.map((tx) =>
+              tx.id === transferId
+                ? {
+                    ...tx,
+                    uploadedBytes: file.size,
+                    speedBps: finalSpeed,
+                    etaSeconds: 0,
+                    progress: 100,
+                    status: 'completed',
+                    completedAt: Date.now(),
+                  }
+                : tx
+            )
+          );
+        } catch (err) {
+          const rawErr = extractErrorMessage(err);
+          console.error('OneDrive direct upload failed:', rawErr);
+          // Remove failed optimistic item so MultiDrive never shows a file that failed to upload to OneDrive
+          setItems((prev) => prev.filter((it) => it.id !== tempId));
+          setUploadTransfers((prev) =>
+            prev.map((tx) =>
+              tx.id === transferId
+                ? {
+                    ...tx,
+                    etaSeconds: 0,
+                    status: 'error',
+                    errorMessage: rawErr,
+                  }
+                : tx
+            )
+          );
+          showToast(err, 'error');
+        }
+      } else {
+        // Smooth telemetry animation for non-live / demo showcase accounts
+        const steps = 6;
+        for (let step = 1; step <= steps; step++) {
+          await new Promise((r) => setTimeout(r, 90));
+          updateTransferTelemetry(Math.round((file.size * step) / steps), file.size);
+        }
+        const finalElapsedSec = Math.max(0.2, (Date.now() - uploadStartTime) / 1000);
+        setUploadTransfers((prev) =>
+          prev.map((tx) =>
+            tx.id === transferId
+              ? {
+                  ...tx,
+                  uploadedBytes: file.size,
+                  speedBps: Math.round(file.size / finalElapsedSec),
+                  etaSeconds: 0,
+                  progress: 100,
+                  status: 'completed',
+                  completedAt: Date.now(),
+                }
+              : tx
+          )
+        );
       }
     }
 
     const uniqueAssigned = Array.from(new Set(assignedAccounts));
-    const targetLabel = uniqueAssigned.length === 1 ? uniqueAssigned[0] : `${uniqueAssigned.length} balanced drives`;
+    const targetLabel =
+      uniqueAssigned.length === 1 ? uniqueAssigned[0] : `${uniqueAssigned.length} balanced drives`;
     showToast(
-      `Uploaded ${files.length} file(s) (${formatBytes(totalUploadedBytes)}) to ${targetLabel}${
+      `Processed ${files.length} file(s) (${formatBytes(totalUploadedBytes)}) for ${targetLabel}${
         loadBalancingEnabled && accounts.length > 1 ? ' [⚡ Auto-Balanced]' : ''
       }`
     );
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
+    }
+  };
+
+  // File Input Change Handler
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    await processFilesUpload(e.target.files);
+  };
+
+  // Remote URL Cloud Pull Handler (fetches remote file server-side & uploads directly to OneDrive)
+  const handleRemoteUrlUpload = async (url: string, customName?: string) => {
+    if (accounts.length === 0) {
+      showToast('Connect a OneDrive account first before pulling remote URLs', 'error');
+      return;
+    }
+
+    let targetAccount = currentAccount || accounts[0];
+    if (loadBalancingEnabled && accounts.length > 1) {
+      const best = findBestAccountForUpload(accounts, 10 * 1024 * 1024);
+      if (best) targetAccount = best.account;
+    }
+
+    const transferId = `url-tx-${Date.now()}`;
+    const displayFileName =
+      customName?.trim() || decodeURIComponent(url.split('/').pop()?.split('?')[0] || 'remote-file.bin');
+    const startTime = Date.now();
+
+    setIsUploadModalOpen(true);
+    setIsUploadModalMinimized(false);
+
+    setUploadTransfers((prev) => [
+      {
+        id: transferId,
+        fileName: displayFileName,
+        fileSize: 0,
+        uploadedBytes: 0,
+        speedBps: 0,
+        etaSeconds: 2,
+        progress: 25,
+        status: 'uploading',
+        accountId: targetAccount.id,
+        accountName: targetAccount.name,
+        accountColor: targetAccount.color,
+        fileType: getFileCategory(displayFileName),
+        startedAt: startTime,
+        sourceType: 'url',
+      },
+      ...prev,
+    ]);
+
+    try {
+      const res = await fetch('/api/drive/remote-url-upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url,
+          customFileName: customName,
+          accountId: targetAccount.id,
+          parentFolderId: currentFolderId,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        throw new Error(data.error || 'Remote URL Cloud Pull failed');
+      }
+
+      const finalName = data.fileName || displayFileName;
+      const finalSize = Number(data.size) || 1024 * 128;
+      const elapsedSec = Math.max(0.25, (Date.now() - startTime) / 1000);
+      const speedBps = Math.round(finalSize / elapsedSec);
+
+      const newItem: DriveItem = {
+        id: data.graphItem?.id || `url-item-${Date.now()}`,
+        name: finalName,
+        accountId: targetAccount.id,
+        accountName: targetAccount.name,
+        accountColor: targetAccount.color,
+        parentId: currentFolderId,
+        isFolder: false,
+        size: finalSize,
+        lastModifiedDateTime: new Date().toISOString(),
+        createdDateTime: new Date().toISOString(),
+        webUrl:
+          data.graphItem?.webUrl ||
+          `https://${targetAccount.tenantName}/Documents/${encodeURIComponent(finalName)}`,
+        downloadUrl: data.graphItem?.['@microsoft.graph.downloadUrl'] || url,
+        mimeType: data.mimeType || 'application/octet-stream',
+        fileType: getFileCategory(finalName, data.mimeType),
+      };
+
+      setItems((prev) => [newItem, ...prev]);
+      setUploadTransfers((prev) =>
+        prev.map((tx) =>
+          tx.id === transferId
+            ? {
+                ...tx,
+                fileName: finalName,
+                fileSize: finalSize,
+                uploadedBytes: finalSize,
+                speedBps,
+                etaSeconds: 0,
+                progress: 100,
+                status: 'completed',
+                completedAt: Date.now(),
+              }
+            : tx
+        )
+      );
+
+      logActivity(
+        'upload',
+        finalName,
+        targetAccount.name,
+        targetAccount.id,
+        `Pulled from Remote URL (${formatBytes(finalSize)})`
+      );
+      showToast(`Pulled "${finalName}" (${formatBytes(finalSize)}) directly to ${targetAccount.name}`);
+    } catch (err) {
+      const msg = extractErrorMessage(err);
+      setUploadTransfers((prev) =>
+        prev.map((tx) =>
+          tx.id === transferId
+            ? {
+                ...tx,
+                status: 'error',
+                errorMessage: msg,
+                etaSeconds: 0,
+              }
+            : tx
+        )
+      );
+      showToast(err, 'error');
     }
   };
 
@@ -1097,17 +1422,36 @@ export default function App() {
     }
   };
 
-  // 1. Render Public Unauthenticated Download Link View
+  // 1a. Render Public Unauthenticated File Request Dropzone Portal (?request=REQ_ID)
+  if (publicRequestId) {
+    return (
+      <>
+        <PublicFileRequestView
+          requestId={publicRequestId}
+          onNavigateHome={() => {
+            window.history.replaceState({}, '', window.location.pathname);
+            setPublicRequestId(null);
+          }}
+        />
+        <VercelTelemetry />
+      </>
+    );
+  }
+
+  // 1b. Render Public Unauthenticated Download Link View (?download=FILE_ID or ?share=FILE_ID)
   if (publicFileId) {
     return (
-      <PublicDownloadView
-        fileId={publicFileId}
-        cachedItems={items}
-        onNavigateToLogin={() => {
-          window.history.replaceState({}, '', window.location.pathname);
-          setPublicFileId(null);
-        }}
-      />
+      <>
+        <PublicDownloadView
+          fileId={publicFileId}
+          cachedItems={items}
+          onNavigateToLogin={() => {
+            window.history.replaceState({}, '', window.location.pathname);
+            setPublicFileId(null);
+          }}
+        />
+        <VercelTelemetry />
+      </>
     );
   }
 
@@ -1125,11 +1469,60 @@ export default function App() {
 
   // 3. Render Administrator Login Screen
   if (!isAuthenticated) {
-    return <LoginScreen onLogin={handleLogin} />;
+    return (
+      <>
+        <LoginScreen onLogin={handleLogin} />
+        <VercelTelemetry />
+      </>
+    );
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-sky-500/30 selection:text-white">
+    <div
+      className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-sky-500/30 selection:text-white relative"
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.dataTransfer.types.includes('Files')) {
+          setIsDraggingOver(true);
+        }
+      }}
+      onDragLeave={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.currentTarget === e.target) {
+          setIsDraggingOver(false);
+        }
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDraggingOver(false);
+        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+          processFilesUpload(e.dataTransfer.files);
+        }
+      }}
+    >
+      {/* Full-Window Drag-and-Drop Upload Overlay */}
+      {isDraggingOver && (
+        <div
+          onDragLeave={() => setIsDraggingOver(false)}
+          className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md border-2 border-dashed border-sky-500 m-3 rounded-3xl flex flex-col items-center justify-center p-6 text-center animate-fadeIn pointer-events-none"
+        >
+          <div className="w-20 h-20 rounded-3xl bg-gradient-to-tr from-sky-600 to-indigo-600 flex items-center justify-center text-white shadow-2xl shadow-sky-500/30 mb-4 animate-bounce">
+            <Upload className="w-10 h-10" />
+          </div>
+          <h2 className="text-xl font-bold text-white tracking-tight">
+            Drop Files Anywhere to Upload to OneDrive
+          </h2>
+          <p className="text-xs text-slate-300 mt-1.5 max-w-md">
+            {loadBalancingEnabled && accounts.length > 1
+              ? 'Smart Multi-Account Load Balancing is active — files will automatically route to the OneDrive tenant with the most available storage.'
+              : `Files will upload directly to ${currentAccount?.name || accounts[0]?.name || 'your connected OneDrive'} with live speed & ETA tracking.`}
+          </p>
+        </div>
+      )}
+
       {/* Hidden file upload input */}
       <input
         ref={fileInputRef}
@@ -1214,6 +1607,9 @@ export default function App() {
           onOpenFtpSftpModal={() => setIsFtpSftpModalOpen(true)}
           onOpenBackupModal={() => setIsBackupModalOpen(true)}
           onOpenChangePasswordModal={() => setIsChangePasswordOpen(true)}
+          onOpenDuplicateFinder={() => setIsDuplicateFinderOpen(true)}
+          onOpenFileRequests={() => setIsFileRequestModalOpen(true)}
+          onOpenWebhookAlerts={() => setIsWebhookAlertsOpen(true)}
           aggregateStorage={aggregateStorage}
         />
 
@@ -1245,6 +1641,14 @@ export default function App() {
                 selectedCount={selectedIds.size}
                 onUploadClick={() => fileInputRef.current?.click()}
                 onNewFolderClick={() => setIsNewFolderOpen(true)}
+                onOpenTransferModal={() => {
+                  setIsUploadModalOpen(true);
+                  setIsUploadModalMinimized(false);
+                }}
+                activeUploadCount={
+                  uploadTransfers.filter((t) => t.status === 'uploading' || t.status === 'queued').length
+                }
+                totalTransfersCount={uploadTransfers.length}
                 onBatchDownloadZip={handleBatchDownloadZip}
                 onBatchMoveClick={() => {
                   const moving = items.filter((i) => selectedIds.has(i.id));
@@ -1421,6 +1825,8 @@ export default function App() {
       {/* Modals & Dialogs */}
       <FilePreviewModal
         item={previewItem}
+        siblingItems={visibleItems}
+        onSelectItem={(it) => setPreviewItem(it)}
         onClose={() => setPreviewItem(null)}
         onDownload={handleDownload}
         onShare={(item) => setShareItem(item)}
@@ -1509,6 +1915,70 @@ export default function App() {
         isOpen={isChangePasswordOpen}
         onClose={() => setIsChangePasswordOpen(false)}
         showToast={(msg, type) => showToast(msg, type)}
+      />
+
+      <DuplicateFinderModal
+        isOpen={isDuplicateFinderOpen}
+        onClose={() => setIsDuplicateFinderOpen(false)}
+        items={items}
+        accounts={accounts}
+        onDeduplicateComplete={(removedIds, freedBytes) => {
+          const removeSet = new Set(removedIds);
+          setItems((prev) => prev.filter((it) => !removeSet.has(it.id)));
+          showToast(
+            `Deduplication Complete: Removed ${removedIds.length} duplicate file(s) and reclaimed ${formatBytes(freedBytes)}`,
+            'success'
+          );
+          logActivity(
+            'delete',
+            `${removedIds.length} duplicate files`,
+            'Cross-Account Deduplicator',
+            'all',
+            `Reclaimed ${formatBytes(freedBytes)}`
+          );
+          // Refresh quotas from server store
+          fetch('/api/storage/data')
+            .then((res) => res.json())
+            .then((data) => {
+              if (Array.isArray(data.accounts)) {
+                setAccounts(data.accounts.map((a: DriveAccount) => normalizeLoadedAccount(a)));
+              }
+            })
+            .catch(() => {});
+        }}
+      />
+
+      <FileRequestModal
+        isOpen={isFileRequestModalOpen}
+        onClose={() => setIsFileRequestModalOpen(false)}
+        accounts={accounts}
+        folders={allFolders}
+        showToast={(msg, type) => showToast(msg, type)}
+      />
+
+      <WebhookAlertsModal
+        isOpen={isWebhookAlertsOpen}
+        onClose={() => setIsWebhookAlertsOpen(false)}
+        showToast={(msg, type) => showToast(msg, type)}
+      />
+
+      <UploadProgressModal
+        isOpen={isUploadModalOpen}
+        isMinimized={isUploadModalMinimized}
+        onToggleMinimize={() => setIsUploadModalMinimized((prev) => !prev)}
+        onClose={() => setIsUploadModalOpen(false)}
+        transfers={uploadTransfers}
+        onClearCompleted={() =>
+          setUploadTransfers((prev) =>
+            prev.filter((t) => t.status === 'uploading' || t.status === 'queued')
+          )
+        }
+        onRemoveTransfer={(id) =>
+          setUploadTransfers((prev) => prev.filter((t) => t.id !== id))
+        }
+        onTriggerFileSelect={() => fileInputRef.current?.click()}
+        onRemoteUrlUpload={handleRemoteUrlUpload}
+        accounts={accounts}
       />
 
       {/* Enhanced Diagnostic Toast Notification Banner */}
@@ -1603,6 +2073,9 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* VPS & Vercel Safe Speed Insights + Web Analytics */}
+      <VercelTelemetry />
     </div>
   );
 }

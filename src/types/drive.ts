@@ -157,3 +157,77 @@ export interface CloudMigrationRequest {
   mode: 'copy' | 'move';
 }
 
+export interface UploadTransferItem {
+  id: string;
+  fileName: string;
+  fileSize: number;
+  uploadedBytes: number;
+  speedBps: number;
+  etaSeconds: number;
+  progress: number;
+  status: 'queued' | 'uploading' | 'completed' | 'error';
+  accountId: string;
+  accountName: string;
+  accountColor: string;
+  fileType: FileCategory;
+  startedAt: number;
+  completedAt?: number;
+  errorMessage?: string;
+  sourceType?: 'local' | 'url';
+}
+
+export interface FileRequestLink {
+  id: string;
+  title: string;
+  description?: string;
+  accountId: string; // 'auto' or specific account ID
+  accountName: string;
+  folderId: string | null;
+  folderName: string;
+  pin?: string;
+  expiresAt?: string;
+  maxFileSizeMB?: number;
+  createdAt: string;
+  uploadCount: number;
+  totalBytesUploaded: number;
+  active: boolean;
+}
+
+export interface WebhookConfig {
+  enabled: boolean;
+  telegramEnabled: boolean;
+  telegramBotToken: string;
+  telegramChatId: string;
+  discordEnabled: boolean;
+  discordWebhookUrl: string;
+  customWebhookEnabled: boolean;
+  customWebhookUrl: string;
+  events: {
+    onUpload: boolean;
+    onDownload: boolean;
+    onLowStorage: boolean;
+    onFileRequestUpload: boolean;
+    onDeduplicate: boolean;
+  };
+}
+
+export interface WebhookDeliveryLog {
+  id: string;
+  timestamp: string;
+  channel: 'telegram' | 'discord' | 'webhook';
+  event: string;
+  message: string;
+  success: boolean;
+  error?: string;
+}
+
+export interface DuplicateGroup {
+  key: string;
+  fileName: string;
+  size: number;
+  matchType: 'exact_name_size' | 'content_hash' | 'normalized_stem';
+  items: DriveItem[];
+  wastedBytes: number;
+}
+
+
