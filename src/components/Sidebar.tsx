@@ -34,10 +34,13 @@ interface SidebarProps {
   onOpenStatsModal: () => void;
   onOpenFtpSftpModal?: () => void;
   onOpenBackupModal?: () => void;
+  onOpenDatabaseModal?: () => void;
   onOpenChangePasswordModal?: () => void;
   onOpenDuplicateFinder?: () => void;
   onOpenFileRequests?: () => void;
   onOpenWebhookAlerts?: () => void;
+  isMobileOpen?: boolean;
+  onCloseMobile?: () => void;
   aggregateStorage: { total: number; used: number; remaining: number; percent: number };
 }
 
@@ -51,14 +54,30 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenStatsModal,
   onOpenFtpSftpModal,
   onOpenBackupModal,
+  onOpenDatabaseModal,
   onOpenChangePasswordModal,
   onOpenDuplicateFinder,
   onOpenFileRequests,
   onOpenWebhookAlerts,
+  isMobileOpen = false,
+  onCloseMobile,
   aggregateStorage,
 }) => {
   return (
-    <aside className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col shrink-0 select-none overflow-y-auto">
+    <>
+      {isMobileOpen && (
+        <div
+          onClick={onCloseMobile}
+          className="fixed inset-0 z-40 bg-slate-950/70 backdrop-blur-xs lg:hidden"
+        />
+      )}
+      <aside
+        className={`w-64 bg-slate-900 border-r border-slate-800 flex-col shrink-0 select-none overflow-y-auto overflow-x-hidden ${
+          isMobileOpen
+            ? 'fixed inset-y-0 left-0 z-50 flex shadow-2xl'
+            : 'hidden lg:flex'
+        }`}
+      >
       {/* Primary Navigation Views */}
       <div className="p-3 space-y-1">
         <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-3 py-1">
@@ -220,10 +239,32 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </button>
         )}
 
+        {onOpenDatabaseModal && (
+          <button
+            type="button"
+            onClick={() => {
+              onOpenDatabaseModal();
+              onCloseMobile?.();
+            }}
+            className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium text-teal-300 hover:bg-teal-500/10 hover:text-teal-200 transition-all border border-teal-500/20 bg-teal-500/5 mt-1"
+          >
+            <div className="flex items-center gap-2.5">
+              <ShieldCheck className="w-4 h-4 text-teal-400" />
+              <span>Database &amp; Security</span>
+            </div>
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-teal-950/60 border border-teal-800/60 text-teal-300">
+              WAL
+            </span>
+          </button>
+        )}
+
         {onOpenBackupModal && (
           <button
             type="button"
-            onClick={onOpenBackupModal}
+            onClick={() => {
+              onOpenBackupModal();
+              onCloseMobile?.();
+            }}
             className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium text-cyan-300 hover:bg-cyan-500/10 hover:text-cyan-200 transition-all border border-cyan-500/20 bg-cyan-500/5 mt-1"
           >
             <div className="flex items-center gap-2.5">
@@ -239,7 +280,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {onOpenChangePasswordModal && (
           <button
             type="button"
-            onClick={onOpenChangePasswordModal}
+            onClick={() => {
+              onOpenChangePasswordModal();
+              onCloseMobile?.();
+            }}
             className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium text-violet-300 hover:bg-violet-500/10 hover:text-violet-200 transition-all border border-violet-500/20 bg-violet-500/5 mt-1"
           >
             <div className="flex items-center gap-2.5">
@@ -390,5 +434,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </div>
     </aside>
+    </>
   );
 };

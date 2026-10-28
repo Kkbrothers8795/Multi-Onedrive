@@ -62,6 +62,7 @@ import { DuplicateFinderModal } from './components/DuplicateFinderModal';
 import { FileRequestModal } from './components/FileRequestModal';
 import { PublicFileRequestView } from './components/PublicFileRequestView';
 import { WebhookAlertsModal } from './components/WebhookAlertsModal';
+import { DatabaseSecurityModal } from './components/DatabaseSecurityModal';
 import { VercelTelemetry } from './components/VercelTelemetry';
 import { LoginScreen } from './components/LoginScreen';
 import { PublicDownloadView } from './components/PublicDownloadView';
@@ -225,6 +226,8 @@ export default function App() {
   const [isDuplicateFinderOpen, setIsDuplicateFinderOpen] = useState(false);
   const [isFileRequestModalOpen, setIsFileRequestModalOpen] = useState(false);
   const [isWebhookAlertsOpen, setIsWebhookAlertsOpen] = useState(false);
+  const [isDatabaseModalOpen, setIsDatabaseModalOpen] = useState(false);
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [uploadTransfers, setUploadTransfers] = useState<UploadTransferItem[]>([]);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [isUploadModalMinimized, setIsUploadModalMinimized] = useState(false);
@@ -1479,7 +1482,7 @@ export default function App() {
 
   return (
     <div
-      className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-sky-500/30 selection:text-white relative"
+      className="min-h-screen w-full max-w-[100vw] overflow-x-hidden bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-sky-500/30 selection:text-white relative"
       onDragOver={(e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -1561,7 +1564,9 @@ export default function App() {
           handleClearSelection();
         }}
         onOpenBackupModal={() => setIsBackupModalOpen(true)}
+        onOpenDatabaseModal={() => setIsDatabaseModalOpen(true)}
         onOpenChangePasswordModal={() => setIsChangePasswordOpen(true)}
+        onToggleMobileSidebar={() => setIsMobileSidebarOpen((prev) => !prev)}
         onLogout={handleLogout}
         aggregateStorage={aggregateStorage}
       />
@@ -1586,7 +1591,7 @@ export default function App() {
       )}
 
       {/* Main Workspace: Sidebar + Content */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden w-full max-w-full min-w-0">
         {/* Left Sidebar */}
         <Sidebar
           accounts={accounts}
@@ -1595,26 +1600,31 @@ export default function App() {
             setSelectedAccountId(accId);
             setCurrentFolderId(null);
             handleClearSelection();
+            setIsMobileSidebarOpen(false);
           }}
           activeNavFilter={navFilter}
           onSelectNavFilter={(filter) => {
             setNavFilter(filter);
             setCurrentFolderId(null);
             handleClearSelection();
+            setIsMobileSidebarOpen(false);
           }}
           onOpenConnectModal={() => setIsConnectModalOpen(true)}
           onOpenStatsModal={() => setIsStatsModalOpen(true)}
           onOpenFtpSftpModal={() => setIsFtpSftpModalOpen(true)}
           onOpenBackupModal={() => setIsBackupModalOpen(true)}
+          onOpenDatabaseModal={() => setIsDatabaseModalOpen(true)}
           onOpenChangePasswordModal={() => setIsChangePasswordOpen(true)}
           onOpenDuplicateFinder={() => setIsDuplicateFinderOpen(true)}
           onOpenFileRequests={() => setIsFileRequestModalOpen(true)}
           onOpenWebhookAlerts={() => setIsWebhookAlertsOpen(true)}
+          isMobileOpen={isMobileSidebarOpen}
+          onCloseMobile={() => setIsMobileSidebarOpen(false)}
           aggregateStorage={aggregateStorage}
         />
 
         {/* Center Content Workspace */}
-        <main className="flex-1 flex flex-col min-w-0 bg-slate-950 overflow-y-auto">
+        <main className="flex-1 flex flex-col min-w-0 max-w-full overflow-x-hidden bg-slate-950 overflow-y-auto">
           {navFilter === 'analytics' ? (
             /* Bandwidth & Access Analytics View */
             <AnalyticsDashboard
@@ -1960,6 +1970,13 @@ export default function App() {
         isOpen={isWebhookAlertsOpen}
         onClose={() => setIsWebhookAlertsOpen(false)}
         showToast={(msg, type) => showToast(msg, type)}
+      />
+
+      <DatabaseSecurityModal
+        isOpen={isDatabaseModalOpen}
+        onClose={() => setIsDatabaseModalOpen(false)}
+        showToast={(msg, type) => showToast(msg, type)}
+        onStatePulled={handleRestoreComplete}
       />
 
       <UploadProgressModal

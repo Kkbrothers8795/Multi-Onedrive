@@ -6,11 +6,22 @@
     --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   }
 
+  html, body, #root {
+    background-color: #020617;
+    color: #f1f5f9;
+    width: 100%;
+    max-width: 100vw;
+    overflow-x: hidden;
+    overscroll-behavior-x: none;
+  }
+
   body {
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     letter-spacing: 0.005em;
+    margin: 0;
+    padding: 0;
   }
 
   code, pre, .font-mono {

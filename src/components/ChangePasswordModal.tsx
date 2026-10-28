@@ -68,6 +68,12 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
         throw new Error(data?.error || `Failed to change password (status ${res.status})`);
       }
 
+      if (data?.token) {
+        try {
+          localStorage.setItem('onedrive_multidrive_admin_token', data.token);
+        } catch {}
+      }
+
       setSuccess(true);
       showToast('Admin password updated successfully!', 'success');
       setTimeout(() => {
