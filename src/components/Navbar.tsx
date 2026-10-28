@@ -14,6 +14,7 @@ import {
   Server,
   Activity,
   Database,
+  Key,
 } from 'lucide-react';
 import { DriveAccount } from '../types/drive';
 import { formatBytes } from '../utils/driveLogic';
@@ -35,6 +36,7 @@ interface NavbarProps {
   onOpenFtpSftpModal?: () => void;
   onOpenAnalytics?: () => void;
   onOpenBackupModal?: () => void;
+  onOpenChangePasswordModal?: () => void;
   onLogout?: () => void;
   aggregateStorage: { total: number; used: number; remaining: number; percent: number };
 }
@@ -56,6 +58,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenFtpSftpModal,
   onOpenAnalytics,
   onOpenBackupModal,
+  onOpenChangePasswordModal,
   onLogout,
   aggregateStorage,
 }) => {
@@ -237,6 +240,20 @@ export const Navbar: React.FC<NavbarProps> = ({
             <span className="hidden sm:inline">Connect Account</span>
             <span className="sm:hidden">Add</span>
           </button>
+
+          {/* Admin Change Password */}
+          {onOpenChangePasswordModal && (
+            <button
+              type="button"
+              onClick={onOpenChangePasswordModal}
+              aria-label="Change administrator password"
+              title="Change Admin Password"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-xs font-semibold transition-all shadow-sm"
+            >
+              <Key className="w-3.5 h-3.5 text-sky-400" />
+              <span className="hidden xl:inline">Password</span>
+            </button>
+          )}
 
           {/* Admin Logout */}
           {onLogout && (

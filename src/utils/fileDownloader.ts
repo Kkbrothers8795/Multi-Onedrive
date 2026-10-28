@@ -2,10 +2,33 @@ import JSZip from 'jszip';
 import { DriveItem } from '../types/drive';
 
 /**
- * Triggers browser download for a single file item
+ * Sends a download tracking signal to the backend to update bandwidth & download metrics immediately
+ */
+export async function trackDownload(item: DriveItem): Promise<void> {
+  try {
+    await fetch('/api/analytics/track-download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fileId: item.id,
+        fileName: item.name,
+        bytes: item.size || 1048576,
+        accountName: item.accountName,
+      }),
+    });
+  } catch (err) {
+    console.warn('Analytics download tracking failed:', err);
+  }
+}
+
+/**
+ * Triggers browser download for a single file item and synchronizes analytics
  */
 export async function downloadSingleFile(item: DriveItem): Promise<void> {
   try {
+    // Record download event and bandwidth consumption in analytics
+    trackDownload(item);
+
     if (item.downloadUrl && item.downloadUrl.startsWith('data:')) {
       const link = document.createElement('a');
       link.href = item.downloadUrl;
@@ -16,7 +39,7 @@ export async function downloadSingleFile(item: DriveItem): Promise<void> {
       return;
     }
 
-    // Always route through site permanent streaming proxy so the download is handled by the site
+    // Route through site permanent streaming proxy so the download is handled by the site
     const downloadLink = `/api/public/download/${encodeURIComponent(item.id)}`;
     const link = document.createElement('a');
     link.href = downloadLink;
@@ -42,6 +65,9 @@ export async function downloadItemsAsZip(
   for (const item of items) {
     if (item.isFolder) continue; // Skip folders
 
+    // Record each downloaded item in analytics
+    trackDownload(item);
+
     // Organize folders inside zip by account name to avoid conflicts
     const accountFolder = zip.folder(item.accountName.replace(/[/\\?%*:|"<>]/g, '_')) || zip;
 
@@ -60,10 +86,16 @@ export async function downloadItemsAsZip(
         const blob = await res.blob();
         accountFolder.file(item.name, blob);
       } else {
-        accountFolder.file(item.name, item.content || `MultiDrive File: ${item.name}\nAccount: ${item.accountName}`);
+        accountFolder.file(
+          item.name,
+          item.content || `MultiDrive File: ${item.name}\nAccount: ${item.accountName}`
+        );
       }
     } catch {
-      accountFolder.file(item.name, item.content || `MultiDrive File: ${item.name}\nAccount: ${item.accountName}`);
+      accountFolder.file(
+        item.name,
+        item.content || `MultiDrive File: ${item.name}\nAccount: ${item.accountName}`
+      );
     }
   }
 

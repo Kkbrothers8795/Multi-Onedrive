@@ -129,6 +129,18 @@ export const PublicDownloadView: React.FC<PublicDownloadViewProps> = ({
     setDownloading(true);
 
     try {
+      // Fire analytics tracking
+      fetch('/api/analytics/track-download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileId: item.id,
+          fileName: item.name,
+          bytes: item.size || 1048576,
+          accountName: item.accountName,
+        }),
+      }).catch(() => {});
+
       if (item.downloadUrl && item.downloadUrl.startsWith('data:')) {
         const link = document.createElement('a');
         link.href = item.downloadUrl;

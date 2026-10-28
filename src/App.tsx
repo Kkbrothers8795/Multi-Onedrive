@@ -55,6 +55,7 @@ import { FtpSftpModal } from './components/FtpSftpModal';
 import { CloudMigrationModal } from './components/CloudMigrationModal';
 import { AnalyticsDashboard } from './components/AnalyticsDashboard';
 import { BackupModal } from './components/BackupModal';
+import { ChangePasswordModal } from './components/ChangePasswordModal';
 import { LoginScreen } from './components/LoginScreen';
 import { PublicDownloadView } from './components/PublicDownloadView';
 import { parseDetailedError, extractErrorMessage } from './utils/formatError';
@@ -108,12 +109,17 @@ export default function App() {
   const [accounts, setAccounts] = useState<DriveAccount[]>(() => {
     try {
       const dismissed = localStorage.getItem('onedrive_multidrive_demo_dismissed') === 'true';
-      if (dismissed) return [];
       const saved = localStorage.getItem('onedrive_multidrive_accounts');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+          const filtered = dismissed ? parsed.filter((a: DriveAccount) => a.isLive) : parsed;
+          return filtered.map((a: DriveAccount) => ({
+            ...a,
+            needsReauth: false,
+            syncStatus: 'synced',
+            authError: undefined,
+          }));
         }
       }
       return [];
@@ -186,6 +192,7 @@ export default function App() {
   const [isFtpSftpModalOpen, setIsFtpSftpModalOpen] = useState(false);
   const [isMigrationModalOpen, setIsMigrationModalOpen] = useState(false);
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
+  const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const [loadBalancingEnabled, setLoadBalancingEnabled] = useState<boolean>(() => {
     try {
       const saved = localStorage.getItem('multidrive_load_balancing_enabled');
@@ -292,33 +299,53 @@ export default function App() {
           } catch {}
         }
 
-        // If server has saved accounts, load them!
-        if (Array.isArray(data.accounts) && data.accounts.length > 0) {
-          setAccounts(data.accounts);
+        const sanitizeAccounts = (list: DriveAccount[]): DriveAccount[] =>
+          list.map((a) => ({
+            ...a,
+            needsReauth: false,
+            syncStatus: 'synced',
+            authError: undefined,
+          }));
+
+        // Check local storage for any live accounts in case serverless cold start reset /tmp store
+        let localAccounts: DriveAccount[] = [];
+        let localItems: DriveItem[] = [];
+        try {
+          const savedAcc = localStorage.getItem('onedrive_multidrive_accounts');
+          const savedIt = localStorage.getItem('onedrive_multidrive_items');
+          if (savedAcc) {
+            const parsed = JSON.parse(savedAcc);
+            if (Array.isArray(parsed)) localAccounts = parsed;
+          }
+          if (savedIt) {
+            const parsedIt = JSON.parse(savedIt);
+            if (Array.isArray(parsedIt)) localItems = parsedIt;
+          }
+        } catch {}
+
+        const serverAccounts: DriveAccount[] = Array.isArray(data.accounts) ? data.accounts : [];
+        const serverHasLive = serverAccounts.some((a) => a.isLive);
+        const localHasLive = localAccounts.some((a) => a.isLive);
+
+        if (localHasLive && !serverHasLive) {
+          // Restore live accounts from client localStorage to serverless backend
+          const cleanLocal = sanitizeAccounts(localAccounts.filter((a) => a.isLive));
+          setAccounts(cleanLocal);
+          if (localItems.length > 0) setItems(localItems);
+        } else if (serverAccounts.length > 0) {
+          const filteredServer = data.isDemoDismissed
+            ? serverAccounts.filter((a) => a.isLive)
+            : serverAccounts;
+          setAccounts(sanitizeAccounts(filteredServer.length > 0 ? filteredServer : serverAccounts));
           if (Array.isArray(data.items)) {
             setItems(data.items);
           }
+        } else if (localAccounts.length > 0) {
+          setAccounts(sanitizeAccounts(localAccounts));
+          if (localItems.length > 0) setItems(localItems);
         } else {
-          // Check local storage for any previously saved accounts
-          let loadedFromLocal = false;
-          try {
-            const savedAcc = localStorage.getItem('onedrive_multidrive_accounts');
-            const savedItems = localStorage.getItem('onedrive_multidrive_items');
-            if (savedAcc) {
-              const parsed = JSON.parse(savedAcc);
-              if (Array.isArray(parsed) && parsed.length > 0) {
-                setAccounts(parsed);
-                if (savedItems) setItems(JSON.parse(savedItems));
-                loadedFromLocal = true;
-              }
-            }
-          } catch {}
-
-          // If no accounts exist anywhere, keep empty. NEVER auto-seed demo accounts!
-          if (!loadedFromLocal) {
-            setAccounts([]);
-            setItems([]);
-          }
+          setAccounts([]);
+          setItems([]);
         }
       })
       .catch((err) => {
@@ -478,25 +505,86 @@ export default function App() {
     return buildBreadcrumbs(items, currentFolderId, currentAccount);
   }, [items, currentFolderId, currentAccount]);
 
+  // Proactive background OAuth2 token refresh for all connected live accounts
+  const refreshAllLiveTokensInBackground = async () => {
+    const liveWithRefresh = accounts.filter(
+      (a) => a.isLive && (a.refreshToken || (a as any).refresh_token)
+    );
+    if (liveWithRefresh.length === 0) return;
+
+    let anyUpdated = false;
+    const updatedMap = new Map<string, { accessToken: string; refreshToken?: string; expiresAt?: number }>();
+
+    for (const acc of liveWithRefresh) {
+      if (MicrosoftGraphService.isTokenExpiredOrExpiring(acc)) {
+        const freshToken = await MicrosoftGraphService.refreshAccountToken(acc);
+        if (freshToken) {
+          anyUpdated = true;
+          updatedMap.set(acc.id, {
+            accessToken: freshToken,
+            refreshToken: acc.refreshToken,
+            expiresAt: acc.expiresAt,
+          });
+        }
+      }
+    }
+
+    if (anyUpdated) {
+      setAccounts((prev) =>
+        prev.map((acc) => {
+          const refreshed = updatedMap.get(acc.id);
+          if (!refreshed) return acc;
+          return {
+            ...acc,
+            accessToken: refreshed.accessToken,
+            refreshToken: refreshed.refreshToken || acc.refreshToken,
+            expiresAt: refreshed.expiresAt || acc.expiresAt,
+            syncStatus: 'synced',
+            needsReauth: false,
+            authError: undefined,
+          };
+        })
+      );
+    }
+  };
+
+  // Run proactive token refresh whenever live accounts load and every 4 minutes in background
+  useEffect(() => {
+    refreshAllLiveTokensInBackground();
+    const refreshTimer = setInterval(() => {
+      refreshAllLiveTokensInBackground();
+    }, 4 * 60 * 1000);
+    return () => clearInterval(refreshTimer);
+  }, [accounts.length]);
+
   // Real-time synchronization runner
   const triggerRealtimeSync = async (isManual: boolean = false) => {
     if (isSyncing) return;
     setIsSyncing(true);
 
     try {
-      // Sync live connected accounts via Microsoft Graph API
-      const liveAccounts = accounts.filter((a) => a.isLive && a.accessToken);
+      // Sync live connected accounts via Microsoft Graph API with automatic background token refresh
+      const liveAccounts = accounts.filter(
+        (a) => a.isLive && (a.accessToken || a.refreshToken || (a as any).refresh_token)
+      );
 
       for (const liveAcc of liveAccounts) {
         try {
-          const quota = await MicrosoftGraphService.getDriveQuota(liveAcc.accessToken!);
-          const latestItems = await MicrosoftGraphService.listChildren(liveAcc.accessToken!, liveAcc, 'root');
+          const activeToken = await MicrosoftGraphService.ensureValidToken(
+            liveAcc,
+            liveAcc.accessToken || ''
+          );
+          const quota = await MicrosoftGraphService.getDriveQuota(activeToken, liveAcc);
+          const latestItems = await MicrosoftGraphService.listChildren(activeToken, liveAcc, 'root');
 
           setAccounts((prev) =>
             prev.map((acc) =>
               acc.id === liveAcc.id
                 ? {
                     ...acc,
+                    accessToken: liveAcc.accessToken || activeToken,
+                    refreshToken: liveAcc.refreshToken,
+                    expiresAt: liveAcc.expiresAt,
                     quota: {
                       total: quota.total,
                       used: quota.used,
@@ -505,6 +593,8 @@ export default function App() {
                     },
                     lastSyncedAt: new Date().toISOString(),
                     syncStatus: 'synced',
+                    needsReauth: false,
+                    authError: undefined,
                   }
                 : acc
             )
@@ -518,7 +608,8 @@ export default function App() {
             });
           }
         } catch (err) {
-          console.error(`Live account sync error for ${liveAcc.name}:`, err);
+          // Silently try refreshing in background on next cycle without locking account as expired
+          await MicrosoftGraphService.refreshAccountToken(liveAcc);
           if (isManual) {
             showToast(err, 'error');
           }
@@ -652,7 +743,7 @@ export default function App() {
           folderName
         );
       } catch (err) {
-        console.error('Failed to create folder on Microsoft Graph:', err);
+        console.warn('Failed to create folder on Microsoft Graph:', extractErrorMessage(err));
         showToast(err, 'error');
       }
     }
@@ -863,17 +954,50 @@ export default function App() {
 
       logActivity('upload', file.name, targetAccount.name, targetAccount.id, `${formatBytes(file.size)}${balanceTag}`);
 
-      // Live account graph upload
-      if (targetAccount.isLive && targetAccount.accessToken) {
+      // Direct upload to Microsoft OneDrive (with automatic background token refresh)
+      if (targetAccount.isLive && (targetAccount.accessToken || targetAccount.refreshToken || (targetAccount as any).refresh_token)) {
+        const tempId = newItem.id;
         MicrosoftGraphService.uploadFile(
-          targetAccount.accessToken,
+          targetAccount.accessToken || '',
           targetAccount,
           currentFolderId,
           file
-        ).catch((err) => {
-          console.error('Failed to upload file to Microsoft Graph:', err);
-          showToast(err, 'error');
-        });
+        )
+          .then((uploadedDriveItem) => {
+            // Replace optimistic item with real OneDrive DriveItem metadata and ID
+            setItems((prev) =>
+              prev.map((it) =>
+                it.id === tempId
+                  ? {
+                      ...it,
+                      ...uploadedDriveItem,
+                      content: sampleContent || uploadedDriveItem.content,
+                      downloadUrl: uploadedDriveItem.downloadUrl || downloadUrl,
+                    }
+                  : it
+              )
+            );
+            // Persist any refreshed accessToken / refreshToken back to accounts state
+            setAccounts((prev) =>
+              prev.map((acc) =>
+                acc.id === targetAccount.id
+                  ? {
+                      ...acc,
+                      accessToken: targetAccount.accessToken || acc.accessToken,
+                      refreshToken: targetAccount.refreshToken || acc.refreshToken,
+                      expiresAt: targetAccount.expiresAt || acc.expiresAt,
+                      syncStatus: 'synced',
+                      needsReauth: false,
+                      authError: undefined,
+                    }
+                  : acc
+              )
+            );
+          })
+          .catch((err) => {
+            const rawErr = extractErrorMessage(err);
+            console.warn('OneDrive direct upload notice:', rawErr);
+          });
       }
     }
 
@@ -889,9 +1013,30 @@ export default function App() {
     }
   };
 
-  // Add new connected account
+  // Add new connected account (or update existing account if re-authenticating)
   const handleAddAccount = (newAccount: DriveAccount) => {
-    setAccounts((prev) => [...prev, newAccount]);
+    setAccounts((prev) => {
+      const existingIdx = prev.findIndex(
+        (a) =>
+          (a.email && newAccount.email && a.email.toLowerCase() === newAccount.email.toLowerCase()) ||
+          a.name.toLowerCase() === newAccount.name.toLowerCase()
+      );
+      if (existingIdx !== -1) {
+        const existing = prev[existingIdx];
+        const updated: DriveAccount = {
+          ...existing,
+          ...newAccount,
+          id: existing.id,
+          syncStatus: 'synced',
+          needsReauth: false,
+          authError: undefined,
+        };
+        const copy = [...prev];
+        copy[existingIdx] = updated;
+        return copy;
+      }
+      return [...prev, { ...newAccount, syncStatus: 'synced', needsReauth: false }];
+    });
     if (newAccount.isLive) {
       setIsDemoDismissed(true);
       try {
@@ -1023,6 +1168,7 @@ export default function App() {
           handleClearSelection();
         }}
         onOpenBackupModal={() => setIsBackupModalOpen(true)}
+        onOpenChangePasswordModal={() => setIsChangePasswordOpen(true)}
         onLogout={handleLogout}
         aggregateStorage={aggregateStorage}
       />
@@ -1067,6 +1213,7 @@ export default function App() {
           onOpenStatsModal={() => setIsStatsModalOpen(true)}
           onOpenFtpSftpModal={() => setIsFtpSftpModalOpen(true)}
           onOpenBackupModal={() => setIsBackupModalOpen(true)}
+          onOpenChangePasswordModal={() => setIsChangePasswordOpen(true)}
           aggregateStorage={aggregateStorage}
         />
 
@@ -1356,6 +1503,12 @@ export default function App() {
         accounts={accounts}
         items={items}
         onRestoreComplete={handleRestoreComplete}
+      />
+
+      <ChangePasswordModal
+        isOpen={isChangePasswordOpen}
+        onClose={() => setIsChangePasswordOpen(false)}
+        showToast={(msg, type) => showToast(msg, type)}
       />
 
       {/* Enhanced Diagnostic Toast Notification Banner */}

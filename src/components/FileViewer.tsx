@@ -57,6 +57,7 @@ export const FileViewer: React.FC<FileViewerProps> = ({ item, className = '', on
   const [videoVolume, setVideoVolume] = useState<number>(1);
   const [isVideoMuted, setIsVideoMuted] = useState<boolean>(false);
   const [videoSpeed, setVideoSpeed] = useState<number>(1);
+  const [videoError, setVideoError] = useState<boolean>(false);
 
   // Audio state
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -66,6 +67,7 @@ export const FileViewer: React.FC<FileViewerProps> = ({ item, className = '', on
   const [audioVolume, setAudioVolume] = useState<number>(1);
   const [isAudioMuted, setIsAudioMuted] = useState<boolean>(false);
   const [audioSpeed, setAudioSpeed] = useState<number>(1);
+  const [audioError, setAudioError] = useState<boolean>(false);
 
   // PDF state
   const [pdfZoom, setPdfZoom] = useState<number>(100);
@@ -89,6 +91,8 @@ export const FileViewer: React.FC<FileViewerProps> = ({ item, className = '', on
     setZoom(1);
     setRotation(0);
     setImgError(false);
+    setVideoError(false);
+    setAudioError(false);
     setTextSearch('');
     setIsVideoPlaying(false);
     setIsAudioPlaying(false);
@@ -229,10 +233,49 @@ export const FileViewer: React.FC<FileViewerProps> = ({ item, className = '', on
       (item.content && item.content.startsWith('http') ? item.content : null) ||
       'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4';
 
+    if (videoError) {
+      return (
+        <div className="flex flex-col items-center justify-center p-8 bg-slate-950 rounded-2xl border border-slate-800 text-center space-y-4">
+          <div className="w-16 h-16 rounded-2xl bg-sky-950/80 border border-sky-800 flex items-center justify-center text-sky-400">
+            <Video className="w-8 h-8" />
+          </div>
+          <div className="space-y-1 max-w-md">
+            <h3 className="text-sm font-semibold text-slate-100">{item.name}</h3>
+            <p className="text-xs text-slate-400">
+              Direct video playback is unavailable for this stream in your browser. You can download the file or open it in Microsoft 365.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+            {onDownload && (
+              <button
+                type="button"
+                onClick={onDownload}
+                className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold flex items-center gap-2 shadow-lg shadow-sky-600/20"
+              >
+                <Download className="w-4 h-4" />
+                <span>Download Video ({formatBytes(item.size)})</span>
+              </button>
+            )}
+            {item.webUrl && (
+              <a
+                href={item.webUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-2 border border-slate-700"
+              >
+                <ExternalLink className="w-4 h-4" />
+                <span>Open in OneDrive</span>
+              </a>
+            )}
+          </div>
+        </div>
+      );
+    }
+
     const togglePlay = () => {
       if (!videoRef.current) return;
       if (videoRef.current.paused) {
-        videoRef.current.play();
+        videoRef.current.play().catch(() => setVideoError(true));
         setIsVideoPlaying(true);
       } else {
         videoRef.current.pause();
@@ -286,6 +329,11 @@ export const FileViewer: React.FC<FileViewerProps> = ({ item, className = '', on
             playsInline
             className="w-full max-h-[55vh] object-contain cursor-pointer"
             onClick={togglePlay}
+            onError={(e) => {
+              e.preventDefault();
+              setVideoError(true);
+            }}
+            onCanPlay={() => setVideoError(false)}
             onTimeUpdate={() => {
               if (videoRef.current) {
                 setVideoCurrentTime(videoRef.current.currentTime);
@@ -436,10 +484,49 @@ export const FileViewer: React.FC<FileViewerProps> = ({ item, className = '', on
       (item.content && item.content.startsWith('http') ? item.content : null) ||
       'https://actions.google.com/sounds/v1/ambiences/daytime_forest_bonfire.ogg';
 
+    if (audioError) {
+      return (
+        <div className="flex flex-col items-center justify-center p-8 bg-slate-950 rounded-2xl border border-slate-800 text-center space-y-4">
+          <div className="w-16 h-16 rounded-2xl bg-violet-950/80 border border-violet-800 flex items-center justify-center text-violet-400">
+            <Music className="w-8 h-8" />
+          </div>
+          <div className="space-y-1 max-w-md">
+            <h3 className="text-sm font-semibold text-slate-100">{item.name}</h3>
+            <p className="text-xs text-slate-400">
+              Direct audio stream playback is unavailable for this file in your browser. You can download the file or open it in Microsoft 365.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+            {onDownload && (
+              <button
+                type="button"
+                onClick={onDownload}
+                className="px-4 py-2 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold flex items-center gap-2 shadow-lg shadow-violet-600/20"
+              >
+                <Download className="w-4 h-4" />
+                <span>Download Audio ({formatBytes(item.size)})</span>
+              </button>
+            )}
+            {item.webUrl && (
+              <a
+                href={item.webUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-2 border border-slate-700"
+              >
+                <ExternalLink className="w-4 h-4" />
+                <span>Open in OneDrive</span>
+              </a>
+            )}
+          </div>
+        </div>
+      );
+    }
+
     const togglePlay = () => {
       if (!audioRef.current) return;
       if (audioRef.current.paused) {
-        audioRef.current.play();
+        audioRef.current.play().catch(() => setAudioError(true));
         setIsAudioPlaying(true);
       } else {
         audioRef.current.pause();
@@ -479,6 +566,11 @@ export const FileViewer: React.FC<FileViewerProps> = ({ item, className = '', on
         <audio
           ref={audioRef}
           src={audioUrl}
+          onError={(e) => {
+            e.preventDefault();
+            setAudioError(true);
+          }}
+          onCanPlay={() => setAudioError(false)}
           onTimeUpdate={() => {
             if (audioRef.current) {
               setAudioCurrentTime(audioRef.current.currentTime);

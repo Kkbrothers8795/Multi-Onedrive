@@ -36,14 +36,41 @@ export const ConnectAccountModal: React.FC<ConnectAccountModalProps> = ({
   onClearAllDemoAccounts,
 }) => {
   const [activeTab, setActiveTab] = useState<'oauth' | 'manage'>('oauth');
-  const [clientId, setClientId] = useState('');
-  const [tenantId, setTenantId] = useState('common');
-  const [clientSecret, setClientSecret] = useState('');
+  const [clientId, setClientId] = useState(() => {
+    try {
+      return localStorage.getItem('multidrive_oauth_client_id') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [tenantId, setTenantId] = useState(() => {
+    try {
+      return localStorage.getItem('multidrive_oauth_tenant_id') || 'common';
+    } catch {
+      return 'common';
+    }
+  });
+  const [clientSecret, setClientSecret] = useState(() => {
+    try {
+      return localStorage.getItem('multidrive_oauth_client_secret') || '';
+    } catch {
+      return '';
+    }
+  });
   const [accountName, setAccountName] = useState('');
   const [color, setColor] = useState('#0284c7');
   const [copiedUri, setCopiedUri] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+
+  // Sync OAuth credentials to localStorage so background token refresh always has them
+  useEffect(() => {
+    try {
+      if (clientId.trim()) localStorage.setItem('multidrive_oauth_client_id', clientId.trim());
+      if (clientSecret.trim()) localStorage.setItem('multidrive_oauth_client_secret', clientSecret.trim());
+      if (tenantId.trim()) localStorage.setItem('multidrive_oauth_tenant_id', tenantId.trim());
+    } catch {}
+  }, [clientId, clientSecret, tenantId]);
 
   // Exact callback URL based on environment
   const redirectUri = typeof window !== 'undefined'
@@ -120,11 +147,14 @@ export const ConnectAccountModal: React.FC<ConnectAccountModalProps> = ({
             accountType: 'business',
             color: color || '#0284c7',
             isLive: true,
-            clientId: clientId.trim(),
-            tenantId: tenantId.trim(),
+            clientId: clientId.trim() || undefined,
+            clientSecret: clientSecret.trim() || undefined,
+            tenantId: tenantId.trim() || 'common',
             accessToken,
             refreshToken,
             expiresAt: Date.now() + (tokenData.expires_in || 3600) * 1000,
+            syncStatus: 'synced',
+            needsReauth: false,
             quota: {
               total: quota.total,
               used: quota.used,
@@ -390,6 +420,30 @@ export const ConnectAccountModal: React.FC<ConnectAccountModalProps> = ({
                   </div>
                 </div>
 
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Azure Client Secret (For Web App Registrations &amp; Background Auto-Refresh)
+                  </label>
+                  <input
+                    type="password"
+                    placeholder="Paste Client Secret Value (optional if set in server .env)"
+                    value={clientSecret}
+                    onChange={(e) => {
+                      setClientSecret(e.target.value);
+                      fetch('/api/auth/oauth-config', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          clientId: clientId.trim(),
+                          clientSecret: e.target.value.trim(),
+                          tenantId: tenantId.trim(),
+                        }),
+                      }).catch(() => {});
+                    }}
+                    className="w-full bg-slate-950 text-xs text-slate-200 border border-slate-800 rounded-xl px-3 py-2 focus:border-sky-500 focus:outline-none font-mono"
+                  />
+                </div>
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
                   <div>
                     <label className="block text-xs font-semibold text-slate-300 mb-1">
@@ -523,7 +577,7 @@ export const ConnectAccountModal: React.FC<ConnectAccountModalProps> = ({
                           style={{ backgroundColor: acc.color }}
                         />
                         <div className="min-w-0">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <p className="text-xs font-semibold text-slate-200 truncate">{acc.name}</p>
                             {acc.isLive ? (
                               <span className="text-[9px] font-semibold bg-emerald-950 text-emerald-400 border border-emerald-800 px-1.5 py-0.2 rounded">
@@ -539,14 +593,16 @@ export const ConnectAccountModal: React.FC<ConnectAccountModalProps> = ({
                         </div>
                       </div>
 
-                      <button
-                        type="button"
-                        onClick={() => onRemoveAccount(acc.id)}
-                        title="Disconnect this account"
-                        className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 transition-colors"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => onRemoveAccount(acc.id)}
+                          title="Disconnect this account"
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>

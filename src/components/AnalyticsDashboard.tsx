@@ -59,6 +59,13 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = () => {
 
   useEffect(() => {
     fetchAnalytics();
+    const interval = setInterval(fetchAnalytics, 8000);
+    const onFocus = () => fetchAnalytics();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+    };
   }, []);
 
   const handleRefresh = () => {

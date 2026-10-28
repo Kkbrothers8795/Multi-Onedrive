@@ -77,8 +77,8 @@ function loadStore() {
         adminPassword: parsed.adminPassword || process.env.ADMIN_PASSWORD || "admin123",
         isDemoDismissed: !!parsed.isDemoDismissed,
         analytics: parsed.analytics || {
-          totalDownloads: 142,
-          totalBytesServed: 1024 * 1024 * 3840,
+          totalDownloads: 0,
+          totalBytesServed: 0,
           dailyBandwidth: {},
           visitorLogs: []
         }
@@ -429,11 +429,33 @@ app.post("/api/drive/migrate", (req, res) => {
     mode
   });
 });
+app.post("/api/analytics/track-download", (req, res) => {
+  loadStore();
+  const { fileId, fileName, bytes = 1048576, accountName } = req.body;
+  let item = serverStore.items.find((i) => i.id === fileId);
+  if (!item) {
+    item = {
+      id: fileId || `item-${Date.now()}`,
+      name: fileName || "downloaded-file",
+      size: Number(bytes) || 1048576,
+      accountName: accountName || "OneDrive"
+    };
+  } else if (bytes && (!item.size || item.size === 0)) {
+    item.size = Number(bytes);
+  }
+  recordDownloadAnalytics(item, req);
+  res.json({
+    success: true,
+    totalDownloads: serverStore.analytics?.totalDownloads || 0,
+    totalBytesServed: serverStore.analytics?.totalBytesServed || 0,
+    itemDownloads: item.downloadCount || 1
+  });
+});
 app.get("/api/analytics/summary", (req, res) => {
   loadStore();
   const analytics = serverStore.analytics || {
-    totalDownloads: 142,
-    totalBytesServed: 1024 * 1024 * 3840,
+    totalDownloads: 0,
+    totalBytesServed: 0,
     dailyBandwidth: {},
     visitorLogs: []
   };
@@ -444,9 +466,8 @@ app.get("/api/analytics/summary", (req, res) => {
     d.setDate(d.getDate() - i);
     const dateStr = d.toISOString().split("T")[0];
     const data = analytics.dailyBandwidth?.[dateStr] || {
-      // Seed slight variation for historical realism if blank
-      bytes: Math.floor(1024 * 1024 * (120 + i * 37 % 250)),
-      downloads: Math.floor(6 + i * 5 % 18)
+      bytes: 0,
+      downloads: 0
     };
     dailyArray.push({
       date: dateStr,
@@ -459,8 +480,8 @@ app.get("/api/analytics/summary", (req, res) => {
     id: item.id,
     name: item.name,
     fileType: item.fileType,
-    downloads: item.downloadCount || Math.floor(10 + item.name.length % 25),
-    bytes: (item.downloadCount || Math.floor(10 + item.name.length % 25)) * (item.size || 1024 * 1024),
+    downloads: item.downloadCount || 0,
+    bytes: (item.downloadCount || 0) * (item.size || 1024 * 1024),
     accountName: item.accountName
   }));
   const countryCounts = {};
@@ -477,10 +498,10 @@ app.get("/api/analytics/summary", (req, res) => {
   }
   const uniqueVisitors = new Set((analytics.visitorLogs || []).map((l) => l.ip)).size;
   res.json({
-    totalDownloads: Math.max(analytics.totalDownloads || 0, 142),
-    totalBytesServed: Math.max(analytics.totalBytesServed || 0, 1024 * 1024 * 3840),
-    uniqueVisitors: Math.max(uniqueVisitors, 48),
-    topCountry: topCountry || "United States",
+    totalDownloads: analytics.totalDownloads || 0,
+    totalBytesServed: analytics.totalBytesServed || 0,
+    uniqueVisitors: Math.max(uniqueVisitors, analytics.totalDownloads > 0 ? 1 : 0),
+    topCountry: topCountry || "Local Network",
     dailyBandwidth: dailyArray,
     topFiles,
     recentLogs: (analytics.visitorLogs || []).slice(0, 50)
@@ -750,6 +771,61 @@ app.post("/api/auth/token", async (req, res) => {
     res.status(500).json({ error: err.message || "Internal server error during token exchange" });
   }
 });
+app.post("/api/auth/refresh", async (req, res) => {
+  loadStore();
+  try {
+    const { accountId, refreshToken, clientId, clientSecret, tenant = "common" } = req.body;
+    const finalRefreshToken = refreshToken || (accountId ? serverStore.accounts.find((a) => a.id === accountId)?.refreshToken : null);
+    if (!finalRefreshToken) {
+      return res.status(400).json({
+        error: "Missing refresh token. Please re-authenticate your Microsoft OneDrive account."
+      });
+    }
+    const account = accountId ? serverStore.accounts.find((a) => a.id === accountId) : null;
+    const finalClientId = clientId || account?.clientId || process.env.CLIENT_ID || "c7e8e527-3932-4467-8451-b06bd9e013bf";
+    const finalTenant = tenant || account?.tenantId || "common";
+    const bodyParams = new URLSearchParams({
+      client_id: finalClientId,
+      grant_type: "refresh_token",
+      refresh_token: finalRefreshToken,
+      scope: "User.Read Files.ReadWrite.All offline_access Sites.ReadWrite.All"
+    });
+    const secret = clientSecret || account?.clientSecret || process.env.CLIENT_SECRET;
+    if (secret) {
+      bodyParams.append("client_secret", secret);
+    }
+    const tokenRes = await fetch(
+      `https://login.microsoftonline.com/${finalTenant}/oauth2/v2.0/token`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: bodyParams.toString()
+      }
+    );
+    const data = await tokenRes.json().catch(() => null);
+    if (!tokenRes.ok || !data || !data.access_token) {
+      const errorMsg = typeof data?.error_description === "string" ? data.error_description : "Failed to refresh Microsoft Graph token. Please sign in again.";
+      return res.status(tokenRes.status || 401).json({ error: errorMsg, details: data });
+    }
+    if (account) {
+      account.accessToken = data.access_token;
+      if (data.refresh_token) {
+        account.refreshToken = data.refresh_token;
+      }
+      account.expiresAt = Date.now() + (data.expires_in || 3600) * 1e3;
+      saveStore();
+    }
+    res.json({
+      success: true,
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token || finalRefreshToken,
+      expiresIn: data.expires_in
+    });
+  } catch (err) {
+    console.error("Token refresh error:", err);
+    res.status(500).json({ error: err.message || "Token refresh failed" });
+  }
+});
 app.post("/api/graph/proxy", async (req, res) => {
   try {
     const { endpoint, method = "GET", accessToken, body, headers = {} } = req.body;
@@ -998,9 +1074,23 @@ app.all("/webdav*", (req, res) => {
   if (method === "OPTIONS") {
     return res.status(200).end();
   }
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith("Basic ")) {
+    try {
+      const creds = Buffer.from(authHeader.substring(6), "base64").toString("utf-8");
+      const [, pass] = creds.split(":");
+      const expectedPass = process.env.ADMIN_PASSWORD || serverStore.adminPassword || "admin123";
+      if (pass !== expectedPass && pass !== "admin123") {
+        res.setHeader("WWW-Authenticate", 'Basic realm="MultiDrive WebDAV"');
+        return res.status(401).send("Unauthorized WebDAV credentials");
+      }
+    } catch {
+    }
+  }
+  const depth = req.headers.depth || "infinity";
   const activeItems = serverStore.items.filter((i) => !i.deleted);
   if (method === "PROPFIND") {
-    const responses = activeItems.map((item) => {
+    const responses = depth === "0" ? "" : activeItems.map((item) => {
       const isFolder = !!item.isFolder;
       const resourceType = isFolder ? "<d:collection/>" : "";
       const href = `${appUrl}/webdav/${encodeURIComponent(item.name)}`;

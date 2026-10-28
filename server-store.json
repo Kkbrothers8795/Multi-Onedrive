@@ -464,5 +464,29 @@
     }
   ],
   "adminPassword": "admin123",
-  "isDemoDismissed": false
+  "isDemoDismissed": false,
+  "analytics": {
+    "totalDownloads": 1,
+    "totalBytesServed": 5242880,
+    "dailyBandwidth": {
+      "2026-10-27": {
+        "bytes": 5242880,
+        "downloads": 1
+      }
+    },
+    "visitorLogs": [
+      {
+        "id": "log-1793121042121-pg05",
+        "fileId": "test-1",
+        "fileName": "demo.mp4",
+        "ip": "142.250.190.46",
+        "country": "United States",
+        "countryCode": "US",
+        "city": "Austin",
+        "userAgent": "curl/7.88.1",
+        "timestamp": "2026-10-27T17:10:42.121Z",
+        "bytes": 5242880
+      }
+    ]
+  }
 }

@@ -15,6 +15,7 @@ import {
   Server,
   Activity,
   Database,
+  Key,
 } from 'lucide-react';
 import { DriveAccount, NavigationFilter } from '../types/drive';
 import { formatBytes } from '../utils/driveLogic';
@@ -30,6 +31,7 @@ interface SidebarProps {
   onOpenStatsModal: () => void;
   onOpenFtpSftpModal?: () => void;
   onOpenBackupModal?: () => void;
+  onOpenChangePasswordModal?: () => void;
   aggregateStorage: { total: number; used: number; remaining: number; percent: number };
 }
 
@@ -43,6 +45,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenStatsModal,
   onOpenFtpSftpModal,
   onOpenBackupModal,
+  onOpenChangePasswordModal,
   aggregateStorage,
 }) => {
   return (
@@ -172,6 +175,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
             <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-cyan-950/60 border border-cyan-800/60 text-cyan-300">
               JSON
+            </span>
+          </button>
+        )}
+
+        {onOpenChangePasswordModal && (
+          <button
+            type="button"
+            onClick={onOpenChangePasswordModal}
+            className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium text-violet-300 hover:bg-violet-500/10 hover:text-violet-200 transition-all border border-violet-500/20 bg-violet-500/5 mt-1"
+          >
+            <div className="flex items-center gap-2.5">
+              <Key className="w-4 h-4 text-violet-400" />
+              <span>Admin Password</span>
+            </div>
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-violet-950/60 border border-violet-800/60 text-violet-300">
+              Auth
             </span>
           </button>
         )}

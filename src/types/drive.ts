@@ -9,6 +9,7 @@ export interface DriveAccount {
   color: string;
   isLive: boolean; // true if connected via real Microsoft Graph OAuth2
   clientId?: string;
+  clientSecret?: string;
   tenantId?: string;
   accessToken?: string;
   refreshToken?: string;
@@ -16,6 +17,8 @@ export interface DriveAccount {
   deltaToken?: string; // Microsoft Graph delta token for incremental sync
   lastSyncedAt?: string;
   syncStatus?: 'idle' | 'syncing' | 'error' | 'synced';
+  needsReauth?: boolean;
+  authError?: string;
   quota: {
     total: number;
     used: number;

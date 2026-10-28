@@ -456,8 +456,12 @@ export function findBestAccountForUpload(
 ): { account: DriveAccount; freeBytes: number; formattedFree: string; reason: string } | null {
   if (!accounts || accounts.length === 0) return null;
 
+  // Prefer accounts that do not have expired tokens / sync errors
+  const healthyAccounts = accounts.filter((a) => !a.needsReauth && a.syncStatus !== 'error');
+  const pool = healthyAccounts.length > 0 ? healthyAccounts : accounts;
+
   // Calculate remaining bytes for each account
-  const evaluated = accounts.map((acc) => {
+  const evaluated = pool.map((acc) => {
     const total = acc.quota?.total || 1099511627776; // default 1 TB
     const used = acc.quota?.used || 0;
     const free = Math.max(0, total - used);
